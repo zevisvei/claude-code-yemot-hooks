@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הגדרת Hooks לצינתוק — Claude Code + ימות המשיח</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Hebrew:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ── Line Console ─────────────────────────────────────────────
+     Telephony signal palette: brand=line, ok=connected, warn=ring,
+     err=busy/deny. Header is a constant dark faceplate. ─────────── */
+  :root{
+    color-scheme:light dark;
+    --bg:#e7ebf2; --panel:#ffffff; --panel-2:#eef2f7; --well:#f3f6fb;
+    --line:#d3dbe7; --line-2:#c1ccdb; --ink:#152130; --muted:#5b6778;
+    --brand:#0d8391; --brand-soft:rgba(13,131,145,.10); --claude:#bd6238;
+    --ok:#1e9d57; --warn:#a9761b; --err:#cd424e;
+    --key:#eef2f9; --key-hi:#ffffff;
+    --code-bg:#0b1220; --code-ink:#dbe6f5; --code-line:#1c2940;
+    --mono:"IBM Plex Mono",ui-monospace,"Cascadia Code",Consolas,monospace;
+    --sans:"IBM Plex Sans Hebrew","Heebo","Segoe UI",Arial,sans-serif;
+    --shadow:0 1px 2px rgba(16,28,48,.05),0 10px 26px -14px rgba(16,28,48,.22);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0b121e; --panel:#131c2b; --panel-2:#0f1826; --well:#0d1522;
+    --line:#243247; --line-2:#31425c; --ink:#e9eef7; --muted:#8fa0b9;
+    --brand:#33c3d7; --brand-soft:rgba(51,195,215,.13); --claude:#e78f61;
+    --ok:#4bc483; --warn:#e7b652; --err:#ee6c77;
+    --key:#1b2637; --key-hi:#26364d;
+    --code-bg:#070d17; --code-ink:#dbe6f5; --code-line:#1a2740;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 14px 34px -18px rgba(0,0,0,.65);
+  }}
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;font-family:var(--sans);color:var(--ink);line-height:1.55;
+    background-color:var(--bg);min-height:100vh;
+    background-image:
+      linear-gradient(to right,rgba(120,140,170,.04) 1px,transparent 1px),
+      linear-gradient(to bottom,rgba(120,140,170,.04) 1px,transparent 1px);
+    background-size:26px 26px;
+  }
+
+  /* ── header faceplate (always dark) ── */
+  header.console{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,#101a29,#0a1120);border-bottom:1px solid #223149;box-shadow:0 8px 22px -14px rgba(0,0,0,.75)}
+  .console-in{max-width:1040px;margin:0 auto;padding:13px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .emblem{flex:none;display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:6px;border:1px solid #2a3a56;border-radius:11px;background:#0b1424}
+  .emblem span{width:14px;height:14px;border-radius:3px;background:linear-gradient(180deg,#20304a,#16213594);display:flex;align-items:center;justify-content:center;font:600 8px/1 var(--mono);color:#63dcec;box-shadow:inset 0 1px 0 rgba(120,180,220,.14)}
+  .brand{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .brand h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em;color:#eef3fb}
+  .brand p{margin:0;font-size:12.5px;color:#9db0ca;max-width:60ch}
+  .bridge{margin-inline-start:auto;display:flex;align-items:center;gap:8px;font:600 12.5px/1 var(--mono);color:#9db0ca;background:#0b1424;border:1px solid #223149;border-radius:999px;padding:8px 14px}
+  .bridge .lamp{width:9px;height:9px;border-radius:50%;background:#33c3d7;box-shadow:0 0 0 3px rgba(51,195,215,.16);animation:breathe 3.2s ease-in-out infinite}
+  @keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+  main{max-width:1040px;margin:0 auto;padding:22px 22px 64px}
+
+  /* ── cards ── */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin:16px 0;box-shadow:var(--shadow)}
+  .card>h2{margin:0 0 16px;display:flex;align-items:center;gap:12px;font-size:0}
+  .num{flex:none;width:36px;height:36px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font:600 13px/1 var(--mono);color:var(--brand);background:linear-gradient(180deg,var(--key-hi),var(--key));border:1px solid var(--line-2);box-shadow:inset 0 1px 0 var(--key-hi),0 2px 3px rgba(16,28,48,.16)}
+  .num.alert{color:var(--err)}
+  .h2-text{display:flex;flex-direction:column;gap:2px}
+  .eyebrow{font:600 10.5px/1.2 var(--mono);letter-spacing:.16em;color:var(--muted);text-transform:uppercase}
+  .h2-title{font-size:16px;font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;color:var(--ink)}
+
+  /* ── forms ── */
+  label{display:block;font:600 12px/1.4 var(--sans);margin:12px 0 5px;color:var(--ink)}
+  input[type=text],input[type=number],select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);color:var(--ink);font-size:14px;font-family:inherit;transition:border-color .15s,box-shadow .15s}
+  input::placeholder,textarea::placeholder{color:var(--muted);opacity:.7}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+  input[dir=ltr],textarea[dir=ltr]{font-family:var(--mono);font-size:13px}
+  textarea{min-height:64px;resize:vertical;font-family:var(--mono);font-size:13px}
+  select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239aa7ba' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:left 11px center;padding-inline-start:30px}
+  input[type=checkbox],input[type=radio]{accent-color:var(--brand)}
+  .row{display:flex;gap:14px;flex-wrap:wrap}.row>div{flex:1;min-width:180px}
+
+  /* ── buttons ── */
+  button{background:var(--brand);color:#fff;border:1px solid transparent;border-radius:9px;padding:9px 16px;font:600 13.5px/1 var(--sans);cursor:pointer;transition:transform .08s,filter .15s,background .15s;box-shadow:0 1px 2px rgba(16,28,48,.16)}
+  button:hover{filter:brightness(1.07)}
+  button:active{transform:translateY(1px)}
+  button.ghost{background:transparent;color:var(--brand);border-color:var(--brand);box-shadow:none}
+  button.ghost:hover{background:var(--brand-soft);filter:none}
+  button.danger{background:var(--err)}
+  button.mini{padding:5px 10px;font-size:12px;border-radius:7px}
+  button:disabled{opacity:.45;cursor:not-allowed;filter:none;transform:none;box-shadow:none}
+  :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .btns{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+
+  /* ── status = signal lamp ── */
+  .status{font-size:13px;padding:10px 13px;border-radius:9px;margin-top:12px;display:none;align-items:center;gap:9px;border:1px solid transparent;line-height:1.4}
+  .status.show{display:flex}
+  .status::before{content:"";width:9px;height:9px;border-radius:50%;flex:none;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 22%,transparent)}
+  .status.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--panel));border-color:color-mix(in srgb,var(--ok) 30%,transparent)}
+  .status.err{color:var(--err);background:color-mix(in srgb,var(--err) 12%,var(--panel));border-color:color-mix(in srgb,var(--err) 30%,transparent)}
+  .status.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 13%,var(--panel));border-color:color-mix(in srgb,var(--warn) 30%,transparent)}
+  .status.warn::before{animation:breathe 1.3s ease-in-out infinite}
+
+  .note{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.5}
+  code{font-family:var(--mono);font-size:.9em;background:var(--brand-soft);color:var(--brand);padding:1px 6px;border-radius:5px}
+  .warnbox{background:color-mix(in srgb,var(--warn) 11%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);border-inline-start:3px solid var(--warn);border-radius:9px;padding:11px 14px;font-size:13px;color:var(--ink);margin:10px 0;line-height:1.5}
+
+  pre{background:var(--code-bg);color:var(--code-ink);padding:15px 16px;border:1px solid var(--code-line);border-radius:11px;overflow:auto;font:12.5px/1.6 var(--mono);direction:ltr;text-align:left;max-height:340px;margin:0}
+
+  .check{display:flex;align-items:center;gap:8px;font:400 13px/1.45 var(--sans);margin:6px 0;color:var(--ink)}
+  .check input{width:auto;margin:0}
+
+  /* ── folder tree ── */
+  .fldr{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0}
+  .fldr button{background:var(--panel-2);color:var(--ink);border:1px solid var(--line);padding:7px 12px;font:500 13px/1 var(--sans);border-radius:8px;box-shadow:none}
+  .fldr button:hover{border-color:var(--brand);background:var(--brand-soft);filter:none}
+  .fldr button.up{background:var(--brand-soft);color:var(--brand);border-color:color-mix(in srgb,var(--brand) 40%,transparent)}
+  .path{font-family:var(--mono);direction:ltr;background:var(--brand-soft);color:var(--brand);padding:4px 9px;border-radius:7px;font-size:13px;display:inline-block;border:1px solid color-mix(in srgb,var(--brand) 24%,transparent)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .item{border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;background:var(--panel-2)}.item b{display:block;font-size:14px;margin-bottom:2px}
+  .pill{display:inline-block;font:500 12px/1.5 var(--sans);padding:2px 10px;border-radius:999px;background:var(--panel-2);color:var(--muted);border:1px solid var(--line);margin:2px}
+  .tag{font:600 11px/1 var(--mono);padding:3px 8px;border-radius:999px;background:var(--brand);color:#fff}
+
+  .hidden{display:none!important}
+  fieldset{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:12px 14px}
+  legend{font:600 12px/1 var(--sans);padding:0 7px;color:var(--muted)}
+
+  /* ── hook cards ── */
+  .hook-card{background:var(--well);border:1px solid var(--line);border-inline-start:3px solid var(--brand);border-radius:11px;padding:14px;margin:12px 0;animation:cardIn .25s ease both}
+  @keyframes cardIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .hook-card .hc-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+  .hook-card .hc-head b{font-size:14px}
+  .hook-card .hc-head .ev{font-family:var(--mono);font-size:11px;color:var(--muted);direction:ltr;background:var(--panel-2);padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
+  .mp,.imp,.openWrap,.itAskWrap{margin-top:8px}
+  .tzlWrap,.itzlWrap{margin-top:4px}
+  .dynnote{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+  a{color:var(--brand);text-underline-offset:2px}
+
+  @media (max-width:640px){
+    .console-in{padding:12px 14px;gap:12px}
+    .bridge{margin-inline-start:0}
+    main{padding:16px 14px 48px}
+    .card{padding:16px}
+    .grid{grid-template-columns:1fr}
+    .brand h1{font-size:17px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+</style>
+</head>
+<body>
+<header class="console">
+  <div class="console-in">
+    <div class="emblem" aria-hidden="true">
+      <span>1</span><span>2</span><span>3</span>
+      <span>4</span><span>5</span><span>6</span>
+      <span>7</span><span>8</span><span>9</span>
+      <span>*</span><span>0</span><span>#</span>
+    </div>
+    <div class="brand">
+      <h1>מרכזיית Hooks · Claude Code ⇄ ימות המשיח</h1>
+      <p>כשקלוד שואל, מבקש הרשאה או מסיים — הטלפון מצלצל. בשיחת גישור, מה שתקיש במקשים חוזר לקלוד.</p>
+    </div>
+    <div class="bridge"><span class="lamp"></span> <b style="color:#e78f61">Claude</b> ⇄ <b style="color:#33c3d7">ימות</b></div>
+  </div>
+</header>
+<main>
+
+  <!-- 1. חיבור והגדרות שרת -->
+  <section class="card">
+    <h2><span class="num">01</span><span class="h2-text"><span class="eyebrow">חיבור</span><span class="h2-title">חיבור והגדרות</span></span></h2>
+    <label for="token">טוקן ימות</label>
+    <input type="text" id="token" dir="ltr" autocomplete="off">
+    <label class="check" style="margin-top:6px"><input type="checkbox" id="useEnvToken" checked> קרא טוקן ב‑hooks מ‑<code dir="ltr">$env:YEMOT_TOKEN</code> (מומלץ — לא נשמר טוקן גלוי ב‑settings.json)</label>
+    <div class="note">הטוקן שכאן משמש לגישה ל‑API בדף הזה. אם מסומן — ה‑hooks של צינתוק יקראו את הטוקן ממשתנה הסביבה במחשב שמריץ Claude Code (הגדר אותו פעם אחת). אם לא — הטוקן יוטמע גלוי בפקודת ה‑hook.</div>
+    <label for="serverPublic">כתובת השרת</label>
+    <input type="text" id="serverPublic" placeholder="https://your-server.example.com" dir="ltr">
+    <div class="note">כתובת אחת לשרת הגישור: ה‑hook פונה אליה (<code dir="ltr">/ask-hook</code>) וגם ימות פונה אליה (<code dir="ltr">/respond</code>, ל‑api_link של שלוחת API). חייבת להיות כתובת ציבורית נגישה מהאינטרנט כדי שימות תוכל להגיע אליה.</div>
+    <div class="btns">
+      <button id="connectBtn">התחבר וטען הכל</button>
+    </div>
+    <div class="status" id="connStatus"></div>
+  </section>
+
+  <!-- 2. נתוני החשבון -->
+  <section class="card">
+    <h2><span class="num">02</span><span class="h2-text"><span class="eyebrow">חשבון</span><span class="h2-title">נתוני החשבון</span></span></h2>
+    <div class="row">
+      <div><label>רשימות צינתוק קיימות</label><div id="listsBox" class="note">— טרם נטען —</div></div>
+      <div><label>תבניות (Templates)</label><div id="tplBox" class="note">— טרם נטען —</div></div>
+    </div>
+    <label style="margin-top:12px">מזהי מתקשר מאושרים</label>
+    <div id="callerBox" class="note">— טרם נטען —</div>
+    <div class="warnbox">שם רשימת צינתוק מופיע כאן רק אחרי שמתקשר חייג לשלוחת ההרשמה ונרשם. רשימה חדשה/ריקה לא תופיע קודם.</div>
+  </section>
+
+  <!-- 3. יצירת שלוחה -->
+  <section class="card">
+    <h2><span class="num">03</span><span class="h2-text"><span class="eyebrow">שלוחה</span><span class="h2-title">יצירת שלוחה · הרשמת צינתוק / API</span></span></h2>
+    <div>נתיב נוכחי: <span class="path" id="curPath">ivr2:/</span></div>
+    <div class="fldr" id="folderList"><span class="note">התחבר תחילה, ואז "רענן עץ".</span></div>
+    <div class="btns"><button class="ghost" id="refreshTree" disabled>רענן עץ</button></div>
+    <label for="extType" style="margin-top:12px">סוג שלוחה</label>
+    <select id="extType">
+      <option value="tzintuk">רשימת צינתוק (הרשמה טלפונית)</option>
+      <option value="api">שלוחת API (webhook לשרת — לאינטראקטיבי)</option>
+    </select>
+    <div class="row" style="margin-top:8px">
+      <div><label for="newExt">מספר שלוחה חדשה</label><input type="text" id="newExt" placeholder="5" dir="ltr"></div>
+      <div><label for="extTitle">כותרת (title)</label><input type="text" id="extTitle" placeholder="הרשמה לצינתוקים"></div>
+      <div id="listNameWrap"><label for="listName">שם רשימת צינתוק</label><input type="text" id="listName" placeholder="רשימה1"></div>
+    </div>
+    <div class="note" id="apiHint" style="display:none">api_link ייקבע אוטומטית ל‑<code dir="ltr">&lt;שרת ציבורי&gt;/respond</code>, עם <code>api_hangup_send=no</code>.</div>
+    <div class="btns"><button id="createExtBtn" disabled>צור שלוחה</button></div>
+    <div class="status" id="extStatus"></div>
+  </section>
+
+  <!-- 4. Hooks -->
+  <section class="card">
+    <h2><span class="num">04</span><span class="h2-text"><span class="eyebrow">hooks</span><span class="h2-title">ה‑Hooks <span class="tag" id="hookCount">0</span></span></span></h2>
+    <div class="note">לכל אירוע הגדרה נפרדת. אפשר כמה hooks (גם לאותו אירוע). מסודר מהנפוץ לפחות נפוץ.</div>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:3">
+        <label for="eventPick">בחר אירוע להוספה</label>
+        <select id="eventPick"></select>
+        <div class="note" id="eventDesc"></div>
+      </div>
+      <div style="flex:1;display:flex;align-items:flex-end"><button id="addHookBtn" style="width:100%">➕ הוסף hook</button></div>
+    </div>
+    <div id="cards"></div>
+  </section>
+
+  <!-- 5. שמירה -->
+  <section class="card">
+    <h2><span class="num">05</span><span class="h2-text"><span class="eyebrow">שמירה</span><span class="h2-title">שמירה ל‑settings.json</span></span></h2>
+    <fieldset>
+      <legend>יעד</legend>
+      <div class="check"><input type="radio" name="target" id="tGlobal" value="global" checked><label for="tGlobal" style="margin:0;font-weight:400">גלובלי — <code dir="ltr">~/.claude/settings.json</code></label></div>
+      <div class="check"><input type="radio" name="target" id="tProject" value="project"><label for="tProject" style="margin:0;font-weight:400">פרויקט — <code dir="ltr">&lt;פרויקט&gt;/.claude/settings.json</code></label></div>
+    </fieldset>
+    <div class="btns">
+      <button id="mergeBtn">פתח קובץ קיים, מזג ושמור</button>
+      <button class="ghost" id="downloadBtn">הורד settings.json</button>
+      <button class="ghost" id="copyBtn">העתק בלוק hooks</button>
+    </div>
+    <div class="note">מיזוג מסיר רק hooks קודמים של הכלי הזה (מזוהים לפי כתובת RunTzintuk/ask-blocking) ומשאיר כל hook אחר.</div>
+    <div class="status" id="saveStatus"></div>
+    <label style="margin-top:14px">תצוגה מקדימה — בלוק hooks</label>
+    <pre id="preview">{}</pre>
+  </section>
+
+  <section class="card">
+    <h2><span class="num alert">!</span><span class="h2-text"><span class="eyebrow">אבטחה</span><span class="h2-title">אבטחה</span></span></h2>
+    <div class="warnbox" style="color:var(--err);border-color:var(--err);background:rgba(200,56,75,.1)">
+      בברירת מחדל (ה‑checkbox בסעיף 1) הטוקן נקרא מ‑<code dir="ltr">$env:YEMOT_TOKEN</code> ואינו נשמר ב‑settings.json. אם תבחר להטמיע אותו כטקסט — הוא גלוי בקובץ: אל תכניס ל‑git, עדיף <code dir="ltr">.claude/settings.local.json</code> (מוגן ב‑gitignore), ואם הודלף סובב סיסמה בימות.
+      hooks אינטראקטיביים אינם מכילים טוקן (הם פונים לשרת; הטוקן חי רק ב‑<code>YEMOT_TOKEN</code> של השרת).
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const API="https://www.call2all.co.il/ym/api/", RING_URI=API+"RunTzintuk";
+const $=id=>document.getElementById(id);
+let state={token:"",curPath:"ivr2:/",data:{lists:[],templates:[],callerIds:[],apiExts:[]}};
+
+/* ---------- event catalog (common -> rare) ---------- */
+// matcher: null | 'tool' | 'notif' | 'text'  (text = free matcher w/ hint)
+// interactive emitKind: null | 'context' | 'decision' | 'stopblock'
+// only the events claude-notifier hooks into.
+// dyn = dynamic answer source from Claude (askuser/permission); ek = free-text answer emit kind (context/stopblock)
+const EVENTS=[
+ {k:"PreToolUse",he:"שאלה מקלוד / לפני כלי",d:"כשקלוד שואל (AskUserQuestion) או לפני הרצת כלי",m:"tool",mh:"AskUserQuestion · Bash · Edit|Write · mcp__.*",dyn:"askuser"},
+ {k:"PermissionRequest",he:"בקשת הרשאה",d:"כשמופיע דיאלוג הרשאה",m:"tool",mh:"Bash · mcp__.*",dyn:"permission"},
+ {k:"Stop",he:"סיום תשובה",d:"כשקלוד סיים תור — התראה בלבד",m:null},
+ {k:"SubagentStop",he:"סיום סוכן‑משנה",d:"כשסוכן‑משנה סיים — התראה בלבד",m:"text",mh:"general-purpose · Explore · שם סוכן"},
+ {k:"UserPromptSubmit",he:"שליחת פרומפט",d:"כשאתה שולח פרומפט, לפני עיבוד — התראה בלבד",m:null},
+];
+function normPhone(p){p=String(p||"").replace(/\D/g,"");if(p.startsWith("972"))p="0"+p.slice(3);return p;}
+const NOTIF_SUBS=["permission_prompt","idle_prompt","agent_needs_input","agent_completed"];
+const evOf=k=>EVENTS.find(e=>e.k===k);
+
+/* ---------- API ---------- */
+async function apiGet(ep,params={}){const u=new URL(API+ep);u.searchParams.set("token",state.token);for(const[k,v]of Object.entries(params))u.searchParams.set(k,v);const r=await fetch(u);const j=await r.json();if(j.responseStatus!=="OK")throw new Error(j.message||j.exceptionMessage||j.responseStatus);return j;}
+async function apiPost(ep,body){const r=await fetch(API+ep,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:state.token,...body})});const j=await r.json();if(j.responseStatus!=="OK")throw new Error(j.message||j.exceptionMessage||j.responseStatus);return j;}
+function setStatus(el,msg,kind){el.textContent=msg;el.className="status show "+(kind||"");}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ---------- connect ---------- */
+$("connectBtn").onclick=async()=>{
+  const t=$("token").value.trim();if(!t){setStatus($("connStatus"),"הזן טוקן","err");return;}
+  state.token=t;localStorage.setItem("yemot_token",t);
+  setStatus($("connStatus"),"מתחבר וטוען…","warn");
+  try{
+    await apiGet("GetIVR2Dir",{path:"ivr2:/"});                 // connectivity check
+    ["refreshTree","createExtBtn"].forEach(id=>$(id).disabled=false);
+    loadTree("ivr2:/");                                         // api exts fill the picker as the user browses
+    const[lists,tpls,callers]=await Promise.all([
+      apiGet("TzintukimListManagement",{action:"getlists"}).catch(()=>({lists:[]})),
+      apiGet("GetTemplates").catch(()=>({templates:[]})),
+      apiGet("GetApprovedCallerIDs").catch(()=>({call:{}})),
+    ]);
+    state.data.lists=lists.lists||[];
+    state.data.templates=tpls.templates||[];
+    const c=callers.call||{};
+    state.data.callerIds=[...new Set([c.mainDid,...(c.secondaryDids||[]),...(c.callerIds||[])].filter(Boolean))];
+    renderData();document.querySelectorAll(".hook-card").forEach(populateCardData);
+    setStatus($("connStatus"),"✓ מחובר ונתונים נטענו. נווט בעץ (סעיף 3) כדי לגלות שלוחות API לבורר.","ok");
+  }catch(e){setStatus($("connStatus"),"✗ "+e.message,"err");}
+};
+// api extensions are discovered lazily while the user navigates the tree (loadTree)
+function refreshApiPickers(){document.querySelectorAll(".ivrPath").forEach(iv=>{const v=iv.value;iv.innerHTML=apiExtOptions();iv.value=v;});}
+function renderData(){
+  const lb=$("listsBox");
+  lb.innerHTML=state.data.lists.length?'<div class="grid">'+state.data.lists.map(l=>`<div class="item"><b>${esc(l.listName)}</b>נרשמו ${l.subscribers??"?"} · פעילים ${l.active??"?"}</div>`).join("")+'</div>':'<span class="note">אין רשימות.</span>';
+  const tb=$("tplBox");
+  tb.innerHTML=state.data.templates.length?state.data.templates.map(t=>`<span class="pill">#${t.templateId} ${esc(t.description||"")}</span>`).join(""):'<span class="note">אין תבניות.</span>';
+  $("callerBox").innerHTML=state.data.callerIds.length?state.data.callerIds.map(c=>`<span class="pill" dir="ltr">${esc(c)}</span>`).join(""):'<span class="note">אין מזהי מתקשר.</span>';
+}
+
+/* ---------- folder tree ---------- */
+async function loadTree(path){
+  state.curPath=path;$("curPath").textContent=path;
+  const box=$("folderList");box.innerHTML='<span class="note">טוען…</span>';
+  try{
+    const j=await apiGet("GetIVR2Dir",{path});
+    const tp=j.thisPath||"/",pp=j.parentPath||"/";let html="",foundApi=false;
+    if(tp!=="/")html+=`<button class="up" data-path="${pp==="/"?"ivr2:/":"ivr2:"+pp}">⬆ למעלה</button>`;
+    (j.dirs||[]).forEach(d=>{
+      const child="ivr2:"+(tp==="/"?"":tp)+d.name+"/";
+      const title=d.extTitle?` — ${esc(d.extTitle)}`:"";
+      const type=d.extType?` <span class="pill">${esc(d.extType)}</span>`:"";
+      html+=`<button data-path="${child}">📁 ${esc(d.name)}${title}${type}</button>`;
+      if(d.extType==="api"){                                    // collect into the ivr_path picker as we browse
+        const rel=((tp==="/"?"":tp)+d.name).replace(/^\//,"");
+        if(!state.data.apiExts.some(e=>e.path===rel)){state.data.apiExts.push({path:rel,title:d.extTitle||""});foundApi=true;}
+      }
+    });
+    box.innerHTML=html||'<span class="note">אין תת‑תיקיות כאן.</span>';
+    box.querySelectorAll("button").forEach(b=>b.onclick=()=>loadTree(b.dataset.path));
+    if(foundApi)refreshApiPickers();
+  }catch(e){box.innerHTML=`<span class="note">שגיאה: ${esc(e.message)}</span>`;}
+}
+$("refreshTree").onclick=()=>loadTree(state.curPath);
+$("extType").onchange=()=>{
+  const api=$("extType").value==="api";
+  $("listNameWrap").style.display=api?"none":"";
+  $("apiHint").style.display=api?"":"none";
+};
+
+/* ---------- create extension ---------- */
+$("createExtBtn").onclick=async()=>{
+  const ext=$("newExt").value.trim();if(!ext){setStatus($("extStatus"),"הזן מספר שלוחה","err");return;}
+  const folder=state.curPath.replace(/^ivr2:\/?/,"").replace(/\/+$/,"");   // "5" | "1/2" | ""
+  const rel=(folder?folder+"/":"")+ext;                                    // "5/11" | "11"
+  const extPath="ivr2:/"+rel, title=$("extTitle").value.trim();
+  let body;
+  if($("extType").value==="api"){
+    const pub=$("serverPublic").value.trim().replace(/\/$/,"");
+    if(!pub){setStatus($("extStatus"),"הזן כתובת שרת ציבורית (סעיף 1)","err");return;}
+    body={path:extPath,type:"api",api_link:pub+"/respond",api_hangup_send:"no",title};
+  }else{
+    const name=$("listName").value.trim();if(!name){setStatus($("extStatus"),"הזן שם רשימה","err");return;}
+    body={path:extPath,type:"tzintuk",list_tzintuk:name,title};
+  }
+  if(!confirm(`ליצור שלוחה ${extPath} (${body.type})?`))return;
+  setStatus($("extStatus"),"יוצר…","warn");
+  try{await apiPost("UpdateExtension",body);
+    if($("extType").value==="api"&&!state.data.apiExts.some(e=>e.path===rel)){state.data.apiExts.push({path:rel,title});refreshApiPickers();}
+    setStatus($("extStatus"),`✓ נוצרה ${extPath}.`+($("extType").value==="tzintuk"?" שם הרשימה יופיע רק אחרי הרשמה טלפונית.":` נוספה לבורר שלוחות ה‑API (ivr_path = ${rel}).`),"ok");
+    loadTree(state.curPath);
+  }catch(e){setStatus($("extStatus"),"✗ "+e.message,"err");}
+};
+
+/* ---------- hook cards ---------- */
+(function fillEventPick(){
+  $("eventPick").innerHTML=EVENTS.map(e=>`<option value="${e.k}">${e.he} — ${e.k}${(e.dyn||e.ek)?" ✦":""}</option>`).join("");
+  $("eventDesc").textContent="✦ = תומך גם ב'שיחת גישור'. "+evOf($("eventPick").value).d;
+})();
+$("eventPick").onchange=()=>{$("eventDesc").textContent="✦ = תומך גם ב'שיחת גישור'. "+evOf($("eventPick").value).d;};
+$("addHookBtn").onclick=()=>{addCard($("eventPick").value);};
+
+function callerOptions(){return '<option value="">ברירת מחדל (ראשי)</option><option value="RAND">RAND</option>'+state.data.callerIds.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");}
+function tplOptions(){return '<option value="">— בחר תבנית —</option>'+state.data.templates.map(t=>`<option value="${t.templateId}">#${t.templateId} ${esc(t.description||"")}</option>`).join("");}
+function tzlChecks(cls){return state.data.lists.length?state.data.lists.map(l=>`<label class="check"><input type="checkbox" class="${cls}" value="${esc(l.listName)}"> ${esc(l.listName)}</label>`).join(""):'<span class="note">אין רשימות (טען נתונים / נרשמו בשלוחה).</span>';}
+function apiExtOptions(){return state.data.apiExts.length?state.data.apiExts.map(e=>`<option value="${esc(e.path)}">${esc(e.path)}${e.title?" — "+esc(e.title):""}</option>`).join(""):'<option value="">— נווט בעץ (סעיף 3) כדי לגלות שלוחות API —</option>';}
+
+let cardSeq=0;
+function addCard(evKey){
+  const ev=evOf(evKey), id="c"+(cardSeq++);
+  const el=document.createElement("div");el.className="hook-card";el.dataset.event=evKey;el.dataset.id=id;
+  const interOpts=(ev.dyn||ev.ek)?`<option value="inter_bridging">מענה — שיחה שמכניסה ישירות לשלוחה (גישור)</option><option value="inter_tzintuk">מענה — צינתוק/קמפיין + חזרה לשלוחה</option>`:"";
+  let matcherHtml="";
+  if(ev.m==="notif") matcherHtml=`<label>סוגי התראה (matcher)</label>`+NOTIF_SUBS.map(s=>`<label class="check"><input type="checkbox" class="nsub" value="${s}" ${s==="permission_prompt"||s==="idle_prompt"?"checked":""}> ${s}</label>`).join("");
+  else if(ev.m==="tool"||ev.m==="text") matcherHtml=`<label>matcher</label><input type="text" class="matcher" placeholder="${esc(ev.mh||"")}"><div class="note">${esc(ev.mh||"")}${ev.m==="tool"?" · ריק = כל הכלים":""}</div>`;
+
+  el.innerHTML=`
+    <div class="hc-head"><div><b>${esc(ev.he)}</b> <span class="ev">${ev.k}</span></div><button class="danger mini rm">הסר</button></div>
+    ${matcherHtml}
+    <label>פעולה</label>
+    <select class="action"><option value="ring">צינתוק — התראה בלבד</option>${interOpts}</select>
+
+    <div class="sec-ring">
+      <div class="row">
+        <div><label>שיטה</label><select class="method"><option value="OTHER">מספרים ישירים</option><option value="TPL">תבנית</option><option value="TZL">רשימת צינתוק</option></select></div>
+        <div><label>מזהה מתקשר</label><select class="ringCaller">${callerOptions()}</select></div>
+        <div><label>משך צינתוק (עד 16)</label><input type="number" class="ringTimeout" value="9" min="1" max="16"></div>
+      </div>
+      <div class="mp mp-OTHER"><label>מספרי טלפון (שורה/פסיק)</label><textarea class="phones" dir="ltr" placeholder="0583238037"></textarea></div>
+      <div class="mp mp-TPL hidden"><label>תבנית</label><select class="tplSelect">${tplOptions()}</select></div>
+      <div class="mp mp-TZL hidden"><label>רשימות</label><div class="tzlWrap">${tzlChecks("tzl")}</div></div>
+      <label class="check"><input type="checkbox" class="ringAsync" checked> async (רקע, לא חוסם)</label>
+    </div>
+
+    <div class="sec-inter hidden">
+      <div class="warnbox">מחייב שרת רץ + שלוחת API. <b>גישור</b>: השיחה היוצאת מכניסה את המתקשר ישירות לשלוחה (ivr_path). <b>צינתוק + חזרה</b>: נשלח צינתוק/קמפיין והנמען חוזר לקו ונכנס לשלוחה. לכל hook הקצה שלוחת API נפרדת — ההתאמה לפי השלוחה, כך שכמה שאלות רצות במקביל. ה‑hook חוסם עד מענה או תום הזמן.</div>
+      <div class="row">
+        <div><label>שלוחת API (ivr_path)</label><select class="ivrPath">${apiExtOptions()}</select></div>
+        <div><label>המתנה לתשובה (שנ')</label><input type="number" class="waitTimeout" value="120" min="20" max="600"></div>
+      </div>
+      <div class="call-fields">
+        <div class="row">
+          <div><label>יעד</label><select class="imethod"><option value="OTHER">מספרים ישירים</option><option value="TPL">תבנית (רשימת תפוצה)</option><option value="TZL">רשימת צינתוק</option></select></div>
+          <div><label>מזהה מתקשר</label><select class="interCaller">${callerOptions()}</select></div>
+          <div><label>משך חיוג (שנ' · ברירת מחדל 30, עד 35)</label><input type="number" class="callsTimeout" value="30" min="10" max="35"></div>
+        </div>
+        <div class="imp imp-OTHER"><label>מספרי טלפון (שורה/פסיק)</label><textarea class="iphones" dir="ltr" placeholder="0583238037"></textarea></div>
+        <div class="imp imp-TPL hidden"><label>תבנית</label><select class="itpl">${tplOptions()}</select></div>
+        <div class="imp imp-TZL hidden"><label>רשימות</label><div class="itzlWrap">${tzlChecks("itzl")}</div></div>
+      </div>
+      <div class="note dynnote"></div>
+      <div class="openWrap hidden"><label>שאלה למשתמש (תוקרא, התשובה חוזרת לקלוד כטקסט חופשי)</label><input type="text" class="openQ" placeholder="קלוד סיים. מה הלאה?"></div>
+      <div class="itAskWrap"><label>שיטת קלט</label><select class="itAsk"><option value="HebrewKeyboard">מקלדת עברית</option><option value="EnglishKeyboard">מקלדת אנגלית</option><option value="Number">מספר</option><option value="DigitsKeyboard">ספרות</option></select></div>
+    </div>`;
+  $("cards").appendChild(el);
+
+  const q=s=>el.querySelector(s);
+  q(".rm").onclick=()=>{el.remove();refresh();};
+  q(".action").onchange=()=>{const iv=q(".action").value.indexOf("inter")===0;el.querySelector(".sec-ring").classList.toggle("hidden",iv);el.querySelector(".sec-inter").classList.toggle("hidden",!iv);refresh();};
+  q(".method").onchange=()=>{["OTHER","TPL","TZL"].forEach(m=>el.querySelector(".mp-"+m).classList.toggle("hidden",q(".method").value!==m));refresh();};
+  const im=q(".imethod");if(im)im.onchange=()=>{["OTHER","TPL","TZL"].forEach(m=>el.querySelector(".imp-"+m).classList.toggle("hidden",im.value!==m));refresh();};
+  // answer source: askuser/permission = dynamic from Claude; ek = configured free-text prompt
+  if(ev.dyn==="askuser"){
+    q(".dynnote").innerHTML='האפשרויות נבנות בזמן ריצה מהשאלה של קלוד (<code dir="ltr">tool_input.questions[].options[]</code>). מתווספת אפשרות "אחר" לטקסט חופשי. ה‑matcher נקבע ל‑<code>AskUserQuestion</code>. הבחירה חוזרת כ‑deny+reason.';
+    const mEl=q(".matcher");if(mEl){mEl.value="AskUserQuestion";mEl.readOnly=true;}
+  }else if(ev.dyn==="permission"){
+    q(".dynnote").innerHTML='השאלה תכיל את הבקשה של קלוד + "לאישור הקש 1, לביטול הקש 2". הבחירה חוזרת כ‑allow/deny (decision.behavior).';
+    q(".itAskWrap").classList.add("hidden");   // no free-text option for permission
+  }else if(ev.ek){
+    q(".dynnote").classList.add("hidden");
+    q(".openWrap").classList.remove("hidden");  // configured free-text question
+  }
+  el.addEventListener("input",refresh);el.addEventListener("change",refresh);
+  refresh();
+}
+function populateCardData(card){
+  card.querySelectorAll(".ringCaller,.interCaller").forEach(s=>{const v=s.value;s.innerHTML=callerOptions();s.value=v;});
+  card.querySelectorAll(".tplSelect,.itpl").forEach(s=>{const v=s.value;s.innerHTML=tplOptions();s.value=v;});
+  const iv=card.querySelector(".ivrPath");if(iv){const v=iv.value;iv.innerHTML=apiExtOptions();iv.value=v;}
+  const tw=card.querySelector(".tzlWrap");if(tw)tw.innerHTML=tzlChecks("tzl");
+  const itw=card.querySelector(".itzlWrap");if(itw)itw.innerHTML=tzlChecks("itzl");
+}
+
+/* ---------- collect + build ---------- */
+function collectCards(){
+  return [...document.querySelectorAll(".hook-card")].map(card=>{
+    const ev=evOf(card.dataset.event), q=s=>card.querySelector(s);
+    let matcher=null;
+    if(ev.m==="notif") matcher=[...card.querySelectorAll(".nsub:checked")].map(c=>c.value).join("|")||null;
+    else if(ev.m) matcher=(q(".matcher")?.value||"").trim()||null;
+    const actionSel=q(".action").value;
+    const action=actionSel==="ring"?"ring":"interactive";
+    const cfg={event:ev.k,matcher,action};
+    if(action==="ring"){
+      const method=q(".method").value;
+      cfg.ring={method,
+        phones:(q(".phones").value||"").split(/[\n,]+/).map(normPhone).filter(Boolean),
+        templateId:q(".tplSelect").value,
+        lists:[...card.querySelectorAll(".tzl:checked")].map(c=>c.value),
+        callerId:q(".ringCaller").value,
+        timeout:parseInt(q(".ringTimeout").value,10)||9,
+        async:q(".ringAsync").checked};
+    }else{
+      const call_method=actionSel==="inter_tzintuk"?"tzintuk":"bridging";
+      const imethod=q(".imethod").value;
+      const common={call_method,method:imethod,
+        phones:(q(".iphones").value||"").split(/[\n,]+/).map(normPhone).filter(Boolean),
+        templateId:q(".itpl").value,
+        lists:[...card.querySelectorAll(".itzl:checked")].map(c=>c.value),
+        ivrPath:q(".ivrPath").value.trim(),callerId:q(".interCaller").value,
+        callsTimeout:parseInt(q(".callsTimeout").value,10)||30,
+        waitTimeout:parseInt(q(".waitTimeout").value,10)||90};
+      if(ev.dyn==="askuser"){cfg.matcher="AskUserQuestion";cfg.inter={...common,mode:"askuser",input_type:q(".itAsk").value};}
+      else if(ev.dyn==="permission"){cfg.inter={...common,mode:"permission"};}
+      else{cfg.inter={...common,mode:"open",event:ev.k,emit_kind:ev.ek,question:q(".openQ").value.trim(),input_type:q(".itAsk").value};}
+    }
+    return cfg;
+  });
+}
+function psRing(r,embedToken,token){
+  const o={};
+  if(embedToken)o.token=token;
+  if(r.method==="OTHER")o.phones=r.phones.join(":");
+  else if(r.method==="TPL")o.phones="tpl:"+(r.templateId||"ID");
+  else{o.phones="tzl:";o.tzintukLists=r.lists;}
+  if(r.callerId)o.callerId=r.callerId;if(r.timeout)o.TzintukTimeOut=r.timeout;
+  const b="'"+JSON.stringify(o).replace(/'/g,"''")+"'";
+  let pre="$ProgressPreference='SilentlyContinue';",body;
+  if(embedToken){body="$b="+b+";";}
+  else{// read the token from the machine's environment; abort quietly if it is not set
+    pre+="$t=$env:YEMOT_TOKEN;if(-not $t){exit};";
+    body="$o="+b+"|ConvertFrom-Json;$o|Add-Member -NotePropertyName token -NotePropertyValue $t -Force;$b=$o|ConvertTo-Json -Compress;";}
+  return pre+body+"try{Invoke-RestMethod -Uri '"+RING_URI+"' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 20|Out-Null}catch{}";
+}
+function psInter(cfg,localUrl){
+  const i=cfg.inter;
+  const config={mode:i.mode,event:i.event||"",emit_kind:i.emit_kind||"",question:i.question||"",
+    call_method:i.call_method||"bridging",
+    method:i.method||"OTHER",phones:i.phones||[],template_id:i.templateId||null,lists:i.lists||[],
+    ivr_path:i.ivrPath,caller_id:i.callerId||null,
+    calls_time_out:i.callsTimeout,wait_timeout:i.waitTimeout,input_type:i.input_type||"HebrewKeyboard"};
+  const cfgJson="'"+JSON.stringify(config).replace(/'/g,"''")+"'";
+  const tout=i.waitTimeout+40;
+  // read the hook event JSON from stdin and forward it so the server can build
+  // the menu from Claude's question (AskUserQuestion) at runtime
+  // UTF-8 console encodings are required: without them PowerShell mangles the
+  // Hebrew in the hook's stdin (question/options) and in the emitted answer
+  return "$ProgressPreference='SilentlyContinue';[Console]::InputEncoding=[Text.Encoding]::UTF8;[Console]::OutputEncoding=[Text.Encoding]::UTF8;$cfg="+cfgJson+
+    ";$in=[Console]::In.ReadToEnd();$b='{\"config\":'+$cfg+',\"hook_input\":'+($in|ConvertTo-Json -Compress)+'}';"+
+    "try{$r=Invoke-RestMethod -Uri '"+localUrl.replace(/\/$/,"")+"/ask-hook' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec "+tout+
+    ";if($r.answered){$r.emit|ConvertTo-Json -Depth 8 -Compress}}catch{}";
+}
+function handlerFor(cfg){
+  const embedToken=!$("useEnvToken").checked;
+  const token=state.token||$("token").value.trim()||"TOKEN";
+  const localUrl=($("serverPublic").value.trim()||"http://localhost:8000").replace(/\/$/,"");   // the bridge server URL
+  if(cfg.action==="ring"){
+    const h={type:"command",shell:"powershell",command:psRing(cfg.ring,embedToken,token),statusMessage:"צינתוק"};
+    if(cfg.ring.async)h.async=true;return h;
+  }
+  return {type:"command",shell:"powershell",command:psInter(cfg,localUrl),timeout:cfg.inter.waitTimeout+50,statusMessage:"שיחת גישור…"};
+}
+function buildHooks(){
+  const hooks={};
+  collectCards().forEach(cfg=>{
+    const group=cfg.matcher?{matcher:cfg.matcher,hooks:[handlerFor(cfg)]}:{hooks:[handlerFor(cfg)]};
+    (hooks[cfg.event]=hooks[cfg.event]||[]).push(group);
+  });
+  return {hooks};
+}
+function refresh(){$("hookCount").textContent=document.querySelectorAll(".hook-card").length;$("preview").textContent=JSON.stringify(buildHooks(),null,2);}
+
+/* ---------- save / merge ---------- */
+const SIG=c=>(c||"").includes("RunTzintuk")||(c||"").includes("/ask-hook");
+function mergeInto(root){
+  const ours=buildHooks().hooks;root.hooks=root.hooks||{};
+  for(const[ev,groups]of Object.entries(ours)){
+    let list=root.hooks[ev]||[];
+    list.forEach(g=>{if(Array.isArray(g.hooks))g.hooks=g.hooks.filter(h=>!SIG(h.command));});
+    list=list.filter(g=>!Array.isArray(g.hooks)||g.hooks.length>0);
+    root.hooks[ev]=list.concat(groups);
+  }
+  Object.keys(root.hooks).forEach(k=>{if(!root.hooks[k].length)delete root.hooks[k];});
+  return root;
+}
+$("mergeBtn").onclick=async()=>{
+  if(!window.showOpenFilePicker){setStatus($("saveStatus"),"אין תמיכה ב‑File System Access. השתמש בהורדה/העתקה.","warn");return;}
+  try{
+    const[fh]=await window.showOpenFilePicker({types:[{description:"settings.json",accept:{"application/json":[".json"]}}]});
+    const txt=(await(await fh.getFile()).text()).trim();
+    const root=mergeInto(txt?JSON.parse(txt):{});
+    const w=await fh.createWritable();await w.write(JSON.stringify(root,null,2));await w.close();
+    setStatus($("saveStatus"),"✓ נשמר ומוזג. הפעל מחדש את הסשן ב‑Claude Code.","ok");
+  }catch(e){if(e.name!=="AbortError")setStatus($("saveStatus"),"✗ "+e.message,"err");}
+};
+$("downloadBtn").onclick=()=>{
+  const blob=new Blob([JSON.stringify(buildHooks(),null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="settings.json";a.click();URL.revokeObjectURL(a.href);
+  const tgt=document.querySelector('input[name=target]:checked').value;
+  setStatus($("saveStatus"),(tgt==="global"?"מזג ל‑~/.claude/settings.json":"מזג ל‑<פרויקט>/.claude/settings.json"),"warn");
+};
+$("copyBtn").onclick=async()=>{await navigator.clipboard.writeText(JSON.stringify(buildHooks(),null,2));setStatus($("saveStatus"),"✓ הועתק.","ok");};
+
+/* ---------- init ---------- */
+$("useEnvToken").onchange=refresh;
+(function(){const t=localStorage.getItem("yemot_token");if(t){$("token").value=t;state.token=t;}refresh();})();
+</script>
+</body>
+</html>
