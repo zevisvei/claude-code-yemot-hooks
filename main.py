@@ -23,7 +23,7 @@ option the free text is injected in place of the sentinel "__OPEN_TEXT__".
 Questions are correlated by extension (ApiExtension), so several questions - each
 on its own `api` extension - can be in flight at once.
 
-Run:  uv run uvicorn server:app --host 0.0.0.0 --port 8000
+Run:  uv run uvicorn main:app --host 0.0.0.0 --port 8000
 Then expose the port on a public URL (any tunnel / reverse proxy) so Yemot can
 reach /respond; set that public URL as the api extension's api_link (done via the
 HTML config).

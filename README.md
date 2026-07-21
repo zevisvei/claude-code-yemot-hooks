@@ -7,17 +7,15 @@
   * **שיחת גישור** (CallExtensionBridging) — חיבור מיידי אוטומטי לשלוחה.
   * **צינתוק + מענה** (RunTzintuk) — נשלח צינתוק, ואתה חוזר למספר (מזהה מתקשר שמפנה לשלוחה) ונכנס אליה לענות.
 
-מצב המענה דורש שרת רץ ([server.py](server.py)). ההגדרה נעשית דרך ממשק HTML עצמאי — בלי backend, בלי Python בצד הלקוח.
+מצב המענה דורש שרת רץ ([main.py](main.py)). ההגדרה נעשית דרך ממשק HTML עצמאי — בלי backend, בלי Python בצד הלקוח.
 
 ## רכיבים
 
 | קובץ | תפקיד |
 |------|-------|
 | [yemot_hooks_config.html](yemot_hooks_config.html) | ממשק הגדרה. פותחים בדפדפן, מגדירים כל hook בנפרד, ושומרים ל‑`settings.json`. |
-| [server.py](server.py) | שרת הגשר (FastAPI): `/ask-hook`, `/respond` (webhook GET), `/health`. |
+| [main.py](main.py) | שרת הגשר (FastAPI): `/ask-hook`, `/respond` (webhook GET), `/health`. |
 | [.claude/settings.json](.claude/settings.json) | דוגמת צינתוק (Notification), קורא טוקן/טלפון ממשתני סביבה. |
-| [main.py](main.py) | דוגמאות קריאה ל‑API דרך חבילת `yemot-api`. |
-
 ## אירועים נתמכים
 
 **PreToolUse** (שאלת AskUserQuestion) ו‑**PermissionRequest** — תומכים גם במענה טלפוני (קלט שחוזר לקלוד). **Stop**, **SubagentStop**, **UserPromptSubmit** — צינתוק (התראה) בלבד.
@@ -82,7 +80,7 @@ setx TZINTUK_PHONE "0583238037"                   # לדוגמת הצינתוק 
 ### הרצת השרת
 
 ```bash
-uv run uvicorn server:app --host 0.0.0.0 --port 8000
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
 # חשוף את הפורט בכתובת ציבורית (מנהרה / reverse-proxy כלשהם) כדי שימות תגיע ל-/respond
 ```
 
@@ -91,13 +89,13 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8000
 ### הזרימה
 
 ```
-Claude hook  --stdin+config → POST /ask-hook-->  server.py
+Claude hook  --stdin+config → POST /ask-hook-->  main.py
    שיחת גישור →  CallExtensionBridging  →  ימות מחייג ומחבר לשלוחה מיידית
    צינתוק+מענה →  RunTzintuk             →  ימות מצנתק; אתה חוזר למספר ונכנס לשלוחה
                                           |
-שלוחת api  --GET /respond-->  server.py  (תפריט DTMF; ל"אחר" read טקסט נוסף)
+שלוחת api  --GET /respond-->  main.py  (תפריט DTMF; ל"אחר" read טקסט נוסף)
                                           |
-בחירה  ------------------->  server.py ממפה ל-emit (מזריק טקסט חופשי אם צריך) ומחזיר
+בחירה  ------------------->  main.py ממפה ל-emit (מזריק טקסט חופשי אם צריך) ומחזיר
                                           |
 ה-hook מדפיס emit ל-stdout  ------------>  Claude ממשיך עם הקלט
 ```
