@@ -273,6 +273,8 @@ const EVENTS=[
  {k:"SubagentStop",he:"סיום סוכן‑משנה",d:"כשסוכן‑משנה סיים — התראה בלבד",m:"text",mh:"general-purpose · Explore · שם סוכן"},
  {k:"UserPromptSubmit",he:"שליחת פרומפט",d:"כשאתה שולח פרומפט, לפני עיבוד — התראה בלבד",m:null},
 ];
+// the server URL is the bridge base: an endpoint pasted at the end (…/ask-hook, …/respond) would be doubled
+function normServer(u){let s=String(u||"").trim().replace(/\/+$/,""),n;while((n=s.replace(/\/(ask-hook|respond|health)$/i,"").replace(/\/+$/,""))!==s)s=n;return s;}
 function normPhone(p){p=String(p||"").replace(/\D/g,"");if(p.startsWith("972"))p="0"+p.slice(3);return p;}
 const NOTIF_SUBS=["permission_prompt","idle_prompt","agent_needs_input","agent_completed"];
 const evOf=k=>EVENTS.find(e=>e.k===k);
@@ -353,7 +355,7 @@ $("createExtBtn").onclick=async()=>{
   const extPath="ivr2:/"+rel, title=$("extTitle").value.trim();
   let body;
   if($("extType").value==="api"){
-    const pub=$("serverPublic").value.trim().replace(/\/$/,"");
+    const pub=normServer($("serverPublic").value);
     if(!pub){setStatus($("extStatus"),"הזן כתובת שרת ציבורית (סעיף 1)","err");return;}
     body={path:extPath,type:"api",api_link:pub+"/respond",api_hangup_send:"no",title};
   }else{
@@ -524,13 +526,13 @@ function psInter(cfg,localUrl){
   // Hebrew in the hook's stdin (question/options) and in the emitted answer
   return "$ProgressPreference='SilentlyContinue';[Console]::InputEncoding=[Text.Encoding]::UTF8;[Console]::OutputEncoding=[Text.Encoding]::UTF8;$cfg="+cfgJson+
     ";$in=[Console]::In.ReadToEnd();$b='{\"config\":'+$cfg+',\"hook_input\":'+($in|ConvertTo-Json -Compress)+'}';"+
-    "try{$r=Invoke-RestMethod -Uri '"+localUrl.replace(/\/$/,"")+"/ask-hook' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec "+tout+
+    "try{$r=Invoke-RestMethod -Uri '"+localUrl+"/ask-hook' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($b)) -ContentType 'application/json; charset=utf-8' -TimeoutSec "+tout+
     ";if($r.answered){$r.emit|ConvertTo-Json -Depth 8 -Compress}}catch{}";
 }
 function handlerFor(cfg){
   const embedToken=!$("useEnvToken").checked;
   const token=state.token||$("token").value.trim()||"TOKEN";
-  const localUrl=($("serverPublic").value.trim()||"http://localhost:8000").replace(/\/$/,"");   // the bridge server URL
+  const localUrl=normServer($("serverPublic").value)||"http://localhost:8000";   // the bridge server URL
   if(cfg.action==="ring"){
     const h={type:"command",shell:"powershell",command:psRing(cfg.ring,embedToken,token),statusMessage:"צינתוק"};
     if(cfg.ring.async)h.async=true;return h;
