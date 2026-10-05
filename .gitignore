@@ -18,3 +18,6 @@ graphify-out/
 # GitHub Pages build + local tooling artifacts
 _site/
 .playwright-mcp/
+
+# VS Code extension package
+*.vsix
