@@ -2,7 +2,7 @@
   "name": "yemot-hooks",
   "displayName": "Yemot Hooks for Claude Code",
   "description": "צינתוק ומענה טלפוני מימות המשיח כש-Claude Code מבקש הרשאה, שואל שאלה או מסיים — עם הגדרות מלאות בתוך VS Code",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "publisher": "zevisvei",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,26 @@
       {
         "command": "yemotHooks.openSettings",
         "title": "Yemot Hooks: הגדרות",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.configureEvent",
+        "title": "Yemot Hooks: הגדר אירוע (טעינה מימות)",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.pickTarget",
+        "title": "Yemot Hooks: בחר יעד ברירת מחדל (טעינה מימות)",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.pickCallerId",
+        "title": "Yemot Hooks: בחר זיהוי יוצא (טעינה מימות)",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.pickIvrPath",
+        "title": "Yemot Hooks: בחר שלוחת API (עיון בימות)",
         "category": "Yemot"
       },
       {
@@ -134,7 +154,7 @@
               "1"
             ],
             "order": 2,
-            "markdownDescription": "שמות רשימות הצינתוק (כש-`target.method` = `list`). רשימה מופיעה בימות רק אחרי שמישהו נרשם אליה טלפונית."
+            "markdownDescription": "שמות רשימות הצינתוק (כש-`target.method` = `list`). רשימה מופיעה בימות רק אחרי שמישהו נרשם אליה טלפונית. הפקודה **בחר יעד ברירת מחדל** טוענת אותן מימות."
           },
           "yemotHooks.target.phones": {
             "type": "array",
@@ -149,13 +169,13 @@
             "type": "string",
             "default": "",
             "order": 4,
-            "markdownDescription": "מזהה תבנית בימות (כש-`target.method` = `template`)."
+            "markdownDescription": "מזהה תבנית בימות (כש-`target.method` = `template`). הפקודה **בחר יעד ברירת מחדל** טוענת אותן מימות."
           },
           "yemotHooks.callerId": {
             "type": "string",
             "default": "",
             "order": 5,
-            "markdownDescription": "הזיהוי היוצא. ריק = המספר הראשי של המערכת. `RAND` = אקראי מבין המאושרים."
+            "markdownDescription": "הזיהוי היוצא כברירת מחדל. ריק = המספר הראשי של המערכת. `RAND` = אקראי מבין המאושרים. כל אירוע יכול לדרוס זאת (`<event>.callerId`). הפקודה **בחר זיהוי יוצא** טוענת את המאושרים מימות."
           },
           "yemotHooks.tzintukTimeout": {
             "type": "number",
@@ -227,6 +247,12 @@
             "order": 2,
             "markdownDescription": "יעד מיוחד לאירוע הזה: `list:1,2` · `phones:0501234567` · `template:123`. ריק = ברירת המחדל."
           },
+          "yemotHooks.needsPermission.callerId": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "זיהוי יוצא לאירוע הזה. ריק = `callerId` הכללי. הפקודה **הגדר אירוע** טוענת את הזיהויים המאושרים מימות.",
+            "order": 3
+          },
           "yemotHooks.asksQuestion.action": {
             "type": "string",
             "enum": [
@@ -240,14 +266,20 @@
               "מענה בטלפון — השאלה והאפשרויות מוקראות, הבחירה חוזרת ל-Claude"
             ],
             "default": "tzintuk",
-            "order": 3,
+            "order": 4,
             "markdownDescription": "מה לעשות כש-Claude שואל שאלה (AskUserQuestion). ⚠️ במענה בטלפון Claude ממתין לתשובה בטלפון לפני שהשאלה מוצגת במסך."
           },
           "yemotHooks.asksQuestion.target": {
             "type": "string",
             "default": "",
-            "order": 4,
+            "order": 5,
             "markdownDescription": "יעד מיוחד לאירוע הזה (`list:…` / `phones:…` / `template:…`). ריק = ברירת המחדל."
+          },
+          "yemotHooks.asksQuestion.callerId": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "זיהוי יוצא לאירוע הזה. ריק = `callerId` הכללי. הפקודה **הגדר אירוע** טוענת את הזיהויים המאושרים מימות.",
+            "order": 6
           },
           "yemotHooks.taskCompleted.action": {
             "type": "string",
@@ -260,14 +292,20 @@
               "צינתוק"
             ],
             "default": "off",
-            "order": 5,
+            "order": 7,
             "markdownDescription": "צינתוק כש-Claude מסיים תשובה."
           },
           "yemotHooks.taskCompleted.target": {
             "type": "string",
             "default": "",
-            "order": 6,
+            "order": 8,
             "markdownDescription": "יעד מיוחד לאירוע הזה. ריק = ברירת המחדל."
+          },
+          "yemotHooks.taskCompleted.callerId": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "זיהוי יוצא לאירוע הזה. ריק = `callerId` הכללי. הפקודה **הגדר אירוע** טוענת את הזיהויים המאושרים מימות.",
+            "order": 9
           },
           "yemotHooks.subagentCompleted.action": {
             "type": "string",
@@ -280,14 +318,20 @@
               "צינתוק"
             ],
             "default": "off",
-            "order": 7,
+            "order": 10,
             "markdownDescription": "צינתוק כשסוכן-משנה מסיים."
           },
           "yemotHooks.subagentCompleted.target": {
             "type": "string",
             "default": "",
-            "order": 8,
+            "order": 11,
             "markdownDescription": "יעד מיוחד לאירוע הזה. ריק = ברירת המחדל."
+          },
+          "yemotHooks.subagentCompleted.callerId": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "זיהוי יוצא לאירוע הזה. ריק = `callerId` הכללי. הפקודה **הגדר אירוע** טוענת את הזיהויים המאושרים מימות.",
+            "order": 12
           }
         }
       },
@@ -319,7 +363,7 @@
             "type": "string",
             "default": "",
             "order": 2,
-            "markdownDescription": "שלוחת ה-API בימות שבה עונים (למשל `5/5`). ה-`api_link` שלה חייב להיות `<serverUrl>/respond` — הפקודה **הגדר את שלוחת ה-API בימות** קובעת זאת."
+            "markdownDescription": "שלוחת ה-API בימות שבה עונים (למשל `5/5`). ה-`api_link` שלה חייב להיות `<serverUrl>/respond` — הפקודה **הגדר את שלוחת ה-API בימות** קובעת זאת. הפקודה **בחר שלוחת API** מאפשרת לעיין בעץ השלוחות בימות."
           },
           "yemotHooks.waitTimeout": {
             "type": "number",

@@ -95,9 +95,10 @@ function resolveTarget(cfg, override) {
 }
 
 // RunTzintuk body for a target (token added by the caller).
-function tzintukBody(cfg, target) {
+// callerId: the event's own caller id wins over the default (yemotHooks.<event>.callerId)
+function tzintukBody(cfg, target, callerId = cfg.callerId) {
   const body = { TzintukTimeOut: Math.min(Math.max(+cfg.tzintukTimeout || 9, 1), 16) };
-  if (cfg.callerId) body.callerId = cfg.callerId;
+  if (callerId) body.callerId = callerId;
   if (target.method === "phones") {
     body.phones = target.phones.map(normPhone).filter(Boolean).join(":");
     if (!body.phones) return null;
@@ -113,10 +114,10 @@ function tzintukBody(cfg, target) {
 }
 
 // ------------------------------------------------------------------ actions
-async function sendTzintuk(cfg, target, why) {
+async function sendTzintuk(cfg, target, why, callerId) {
   const token = process.env.YEMOT_TOKEN || "";
   if (!token) { log("ERROR tzintuk skipped: YEMOT_TOKEN is not set (VS Code: Yemot Hooks: הגדר טוקן ימות)"); return; }
-  const body = tzintukBody(cfg, target);
+  const body = tzintukBody(cfg, target, callerId || cfg.callerId);
   if (!body) { log("ERROR tzintuk skipped: empty target", target); return; }
   try {
     const r = await postJson(YEMOT_API + "RunTzintuk", { token, ...body }, 20000);
@@ -127,17 +128,17 @@ async function sendTzintuk(cfg, target, why) {
 
 // Fire a tzintuk without making Claude wait: a detached child does the HTTP call
 // (and the optional "only if still unanswered after N seconds" delay).
-function tzintukDetached(target, why, session, delaySec) {
+function tzintukDetached(target, why, session, delaySec, callerId) {
   const token = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
   if (delaySec > 0) writeState("wait", session, token);
-  const payload = Buffer.from(JSON.stringify({ target, why, session, delaySec, token })).toString("base64");
+  const payload = Buffer.from(JSON.stringify({ target, why, session, delaySec, token, callerId })).toString("base64");
   try {
     const child = spawn(process.execPath, [__filename, "__ring", payload], { detached: true, stdio: "ignore", env: process.env });
     child.unref();
   } catch (e) { log("ERROR spawn", e.message); }
 }
 async function deferredRing(payloadB64) {
-  const { target, why, session, delaySec, token } = JSON.parse(Buffer.from(payloadB64, "base64").toString("utf8"));
+  const { target, why, session, delaySec, token, callerId } = JSON.parse(Buffer.from(payloadB64, "base64").toString("utf8"));
   if (delaySec > 0) {
     await new Promise((r) => setTimeout(r, delaySec * 1000));
     if (readState("wait", session) !== token) { log("tzintuk cancelled (answered in time):", why); return; }
@@ -145,7 +146,7 @@ async function deferredRing(payloadB64) {
   }
   const cfg = readConfig();
   if (!cfg || !cfg.enabled) return;
-  await sendTzintuk(cfg, target, why);
+  await sendTzintuk(cfg, target, why, callerId);
 }
 
 // Interactive: the bridge server calls the phone and blocks until a key is pressed.
@@ -161,7 +162,7 @@ async function askBridge(cfg, ev, mode, raw) {
     mode,
     call_method: viaTzintuk ? "tzintuk" : "bridging",
     method, phones: target.phones.map(normPhone).filter(Boolean), template_id: target.templateId || null, lists: target.lists,
-    ivr_path: cfg.ivrPath, caller_id: cfg.callerId || null,
+    ivr_path: cfg.ivrPath, caller_id: ev.callerId || cfg.callerId || null,
     calls_time_out: viaTzintuk ? (+cfg.tzintukTimeout || 9) : (+cfg.callTimeout || 30),
     wait_timeout: wait, input_type: cfg.inputType || "HebrewKeyboard",
   };
@@ -224,7 +225,7 @@ async function handle(which, raw, out) {
 
   if (action === "tzintuk" || which === "stop" || which === "subagent") {
     const delay = which === "permission" || which === "question" ? Math.max(+cfg.ringDelaySeconds || 0, 0) : 0;
-    tzintukDetached(target, why, session, delay);
+    tzintukDetached(target, why, session, delay, ev.callerId);
     return;
   }
 
@@ -232,7 +233,7 @@ async function handle(which, raw, out) {
   const emit = await askBridge(cfg, ev, which === "question" ? "askuser" : "permission", raw);
 
   if (emit && emit.__failed) {
-    if (cfg.fallbackToTzintuk !== false) { log("fallback -> tzintuk", why); await sendTzintuk(cfg, target, why + " (fallback)"); }
+    if (cfg.fallbackToTzintuk !== false) { log("fallback -> tzintuk", why); await sendTzintuk(cfg, target, why + " (fallback)", ev.callerId); }
     return;
   }
   if (emit) out(JSON.stringify(emit));

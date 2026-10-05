@@ -109,6 +109,8 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
       const body = b ? JSON.parse(b) : {};
       calls.push({ url: req.url, body });
       res.setHeader("Content-Type", "application/json");
+      if (req.url.includes("/GetApprovedCallerIDs")) return res.end(JSON.stringify({ responseStatus: "OK", call: { mainDid: "+97231111111", secondaryDids: ["+97232222222"], callerIds: ["+97231111111"] } }));
+      if (req.url.includes("/TzintukimListManagement")) return res.end(JSON.stringify({ responseStatus: "OK", lists: [{ listName: "1", subscribers: 1, active: 1 }, { listName: "vip", subscribers: 3, active: 2 }] }));
       if (req.url.endsWith("/RunTzintuk")) return res.end(JSON.stringify({ responseStatus: "OK", callsCount: 1, biling: "0.00", errors: {} }));
       if (req.url === "/claude-hooks/K/ask-hook") return res.end(JSON.stringify({ answered: true, answer: "1", emit: { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } } }));
       res.statusCode = 404; res.end("{}");
@@ -134,6 +136,37 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   assert.ok(await waitFor(() => calls.some((c) => c.url.endsWith("/RunTzintuk"))), "tzintuk sent");
   const ring = calls.find((c) => c.url.endsWith("/RunTzintuk")).body;
   assert.equal(ring.phones, "tzl:"); assert.deepEqual(ring.tzintukLists, ["1"]); assert.equal(ring.token, "u:p");
+
+  // per-event caller id beats the default
+  calls.length = 0;
+  writeCfg({ callerId: "0300000000", events: { ...cfgFile.events, needsPermission: { action: "tzintuk", target: "", tools: "", callerId: "0799999999" } } });
+  await runHook("permission", { session_id: "s1", tool_name: "Bash" });
+  assert.ok(await waitFor(() => calls.length > 0));
+  assert.equal(calls[0].body.callerId, "0799999999", "event caller id");
+  calls.length = 0;
+  writeCfg({ callerId: "0300000000", events: { ...cfgFile.events, needsPermission: { action: "tzintuk", target: "", tools: "", callerId: "" } } });
+  await runHook("permission", { session_id: "s1", tool_name: "Bash" });
+  assert.ok(await waitFor(() => calls.length > 0));
+  assert.equal(calls[0].body.callerId, "0300000000", "default caller id");
+
+  // pickers: configure an event from data loaded from (mock) Yemot
+  process.env.YEMOT_HOOKS_API = base + "/ym/api/";
+  const picks = [
+    (items) => items.find((i) => i.key === "taskCompleted"),
+    (items) => items.find((i) => i.a === "tzintuk"),
+    (items) => items.find((i) => i.kind === "list"),
+    (items) => items.filter((i) => i.label === "vip"),
+    (items) => { assert.deepEqual(items.map((i) => i.value).slice(0, 3), ["", "031111111", "032222222"], "caller ids loaded + localized"); return items.find((i) => i.value === "032222222"); },
+  ];
+  vscode.window.showQuickPick = async (items) => picks.shift()(items);
+  await cmds.configureEvent(); await tick(80);
+  assert.equal(picks.length, 0, "all pickers consumed");
+  assert.equal(settings["taskCompleted.action"], "tzintuk");
+  assert.equal(settings["taskCompleted.target"], "list:vip");
+  assert.equal(settings["taskCompleted.callerId"], "032222222");
+  const synced = JSON.parse(fs.readFileSync(path.join(home, ".claude", "yemot-hooks", "config.json"), "utf8"));
+  assert.equal(synced.events.taskCompleted.callerId, "032222222", "picked caller id reaches config.json");
+  assert.ok(T.splitHooks(read().hooks).ours.Stop, "Stop hook registered after enabling the event");
 
   // tools filter
   calls.length = 0;
