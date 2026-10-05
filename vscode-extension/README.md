@@ -1,43 +1,74 @@
 # Yemot Hooks — תוסף VS Code
 
-הדלקה, כיבוי והגדרה של ה-hooks של ימות (צינתוק / מענה טלפוני) ב-`~/.claude/settings.json`, מתוך VS Code.
-עובד גם מקומית וגם ב-Remote-SSH: התוסף רץ בצד המכונה שבה רץ Claude Code (`extensionKind: workspace`),
-ולכן הוא עורך את `settings.json` של השרת המרוחק ולא של המחשב שלך.
+כש-Claude Code מבקש הרשאה, שואל שאלה או מסיים — הטלפון מצלצל דרך ימות המשיח.
+בשיחת מענה אפשר גם **לענות מהטלפון**: לאשר/לבטל הרשאה, או לבחור תשובה לשאלה של Claude.
 
-## מה יש בו
+כל ההגדרות יושבות בהגדרות של VS Code (`yemotHooks.*`), בדומה ל-Claude Notifier.
+התוסף רושם ב-`~/.claude/settings.json` סקריפט node אחד (`~/.claude/yemot-hooks/hook.js`),
+והסקריפט קורא את ההגדרות בכל הפעלה מ-`~/.claude/yemot-hooks/config.json`. לכן **שינוי הגדרה חל מיד**,
+בלי לערוך את `settings.json` — הוא נכתב מחדש רק כשמדליקים/מכבים אירוע.
 
-בשורת הסטטוס: **ימות: פעיל / כבוי / לא מוגדר**. לחיצה פותחת תפריט:
+עובד גם ב-Remote-SSH: התוסף רץ בצד המכונה שבה רץ Claude Code (`extensionKind: workspace`).
+דרישה יחידה: `node` ב-PATH של המכונה (אין יותר צורך ב-PowerShell).
 
-| פעולה | מה היא עושה |
+## פעולה לכל אירוע
+
+| אירוע | אפשרויות |
 |---|---|
-| **הדלק / כבה** | כיבוי מוציא את ה-hooks של ימות מ-`settings.json` ושומר אותם ב-`~/.claude/yemot-hooks.json`; הדלקה מחזירה אותם. hooks אחרים לא נוגעים. |
-| **פתח את דף ההגדרה** | פותח את `yemot_hooks_config.html` בדפדפן (המקומי שלך, גם ב-Remote-SSH). |
-| **ייבא hooks מהלוח** | אחרי "העתק בלוק hooks" בדף ההגדרה — מחליף את ה-hooks של ימות ב-`settings.json` ומדליק. |
-| **הגדר טוקן ימות** | שומר `env.YEMOT_TOKEN` ב-`settings.json` (קובץ בהרשאה 600), ל-hooks של צינתוק שקוראים `$env:YEMOT_TOKEN`. |
-| **בדיקת שרת** | `GET …/health` של הגשר: האם השרת זמין, יש לו טוקן, וכמה שאלות ממתינות. |
-| הצג hooks / פתח settings.json | לראות מה מוגדר בפועל. |
+| בקשת הרשאה (`needsPermission`) | כבוי · צינתוק · מענה בטלפון (1 = אישור, 2 = ביטול) |
+| שאלה (`asksQuestion`) | כבוי · צינתוק · מענה בטלפון (השאלה והאפשרויות מוקראות, הבחירה חוזרת ל-Claude) |
+| סיום משימה (`taskCompleted`) | כבוי · צינתוק |
+| סוכן-משנה סיים (`subagentCompleted`) | כבוי · צינתוק |
 
-ה-hooks "שלנו" מזוהים בדיוק כמו בדף ההגדרה: כל hook שהפקודה שלו פונה ל-`RunTzintuk` או ל-`/ask-hook`.
+לכל אירוע אפשר יעד משלו (`<event>.target`): `list:1,2` · `phones:0501234567` · `template:123`.
+להרשאה יש גם סינון כלים (`needsPermission.tools`, regex — למשל `Bash|Write|Edit`).
 
-## הגדרות
+## הגדרות כלליות
 
-| הגדרה | ברירת מחדל | |
-|---|---|---|
-| `yemotHooks.serverUrl` | ריק (יישאל בשימוש הראשון) | כתובת השרת שמריץ את הגשר, בלי `/claude-hooks`. |
-| `yemotHooks.configUrl` | ריק | כתובת מלאה לדף ההגדרה. ריק = `<serverUrl>/claude-hooks/config` (כשהגשר רץ בתוך yemot-suite). עם `main.py` העצמאי — היכן שמתארח `yemot_hooks_config.html` (למשל GitHub Pages). |
-| `yemotHooks.settingsFile` | `~/.claude/settings.json` | קובץ ההגדרות של Claude Code. |
+| הגדרה | |
+|---|---|
+| `enabled` | הדלקה/כיבוי של הכל |
+| `target.method` / `target.lists` / `target.phones` / `target.templateId` | יעד ברירת המחדל (רשימת צינתוק = חינם) |
+| `callerId` | זיהוי יוצא (ריק = ראשי, `RAND`) |
+| `tzintukTimeout` | משך צלצול הצינתוק (1–16 שניות) |
+| `quietHours` | שעות שקט, `22:00-07:00` |
+| `ringDelaySeconds` | לצלצל רק אם לא ענית ב-VS Code תוך N שניות |
+| `minTaskDurationSeconds` | צינתוק סיום רק למשימות ארוכות מ-N שניות |
+| `suppressSubagentInteractions` | בלי צלצול על הרשאות/שאלות מתוך סוכן-משנה |
+
+## מענה בטלפון
+
+| הגדרה | |
+|---|---|
+| `answerVia` | `call` — ימות מתקשרת ומכניסה לשלוחה · `tzintuk` — צינתוק, ואתה מחזיר צלצול לשלוחה |
+| `serverUrl` | שרת הגישור (`main.py` / yemot-suite). **בלי** `/ask-hook` בסוף — ואם יוזן, יוסר |
+| `ivrPath` | שלוחת ה-API בימות (למשל `5/5`). ה-`api_link` שלה = `<serverUrl>/respond` |
+| `waitTimeout` / `callTimeout` | זמן המתנה לתשובה / משך חיוג |
+| `inputType` | הקלדה לתשובה חופשית ("אחר") |
+| `fallbackToTzintuk` | שיחה נכשלה (שרת לא זמין) → צינתוק במקום |
+
+## פקודות (שורת הסטטוס → תפריט)
+
+- **בדיקת תקינות** — node, טוקן ימות + יחידות, רשימות הצינתוק, שרת הגישור, וה-`api_link` של השלוחה.
+- **שלח צינתוק בדיקה** / **שיחת בדיקה** — בדיקה מקצה לקצה.
+- **הגדר את שלוחת ה-API בימות** — קובע `type=api` + `api_link=<serverUrl>/respond` (עם אישור).
+- **הגדר טוקן ימות** — `env.YEMOT_TOKEN` ב-`settings.json` (הרשאה 600).
+- **הצג יומן** — כל צלצול, תשובה ושגיאה נרשמים ב-`~/.claude/yemot-hooks/hook.log`
+  (בגרסה הקודמת שגיאות נבלעו בשקט).
+- **המר hooks ישנים** — hooks של PowerShell מדף ההגדרה הישן מומרים להגדרות ומוסרים.
 
 ## התקנה
 
 ```bash
 cd vscode-extension
 npx @vscode/vsce package --allow-missing-repository --skip-license -o yemot-hooks.vsix
+code --install-extension yemot-hooks.vsix
 ```
 
-ב-VS Code: **Extensions ← ⋯ ← Install from VSIX…**. ב-Remote-SSH — מתוך החלון המחובר, כך שיותקן בצד השרת.
+או מה-Releases ב-GitHub. ב-Remote-SSH — מתוך החלון המחובר.
 
 ## הערות
 
-- שינוי hooks חל על **שיחות Claude חדשות**. שיחה שכבר רצה ממשיכה עם ההגדרות שהיו כשהתחילה.
-- ה-hooks שהדף מייצר הם `"shell": "powershell"`. ב-**Linux / Mac** צריך PowerShell 7 (`pwsh`) ב-PATH — Claude Code מריץ אותם דרכו.
-- בדיקות: `node test.js` (מריץ הדלקה/כיבוי/ייבוא מול `HOME` זמני).
+- שינוי **רשימת** ה-hooks (הדלקה/כיבוי אירוע) חל על שיחות Claude חדשות; שינוי פרטים (יעד, שעות שקט…) חל מיד.
+- "מענה בטלפון" על שאלה חוסם: Claude ממתין לתשובה בטלפון (עד `waitTimeout`) לפני שהשאלה מוצגת במסך.
+- בדיקות: `node test.js` (‏HOME זמני + שרתי מוק — שום בקשה לא יוצאת).

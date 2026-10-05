@@ -1,8 +1,8 @@
 {
   "name": "yemot-hooks",
   "displayName": "Yemot Hooks for Claude Code",
-  "description": "הדלקה, כיבוי והגדרה של hooks של ימות המשיח (צינתוק / מענה טלפוני) ל-Claude Code",
-  "version": "1.0.0",
+  "description": "צינתוק ומענה טלפוני מימות המשיח כש-Claude Code מבקש הרשאה, שואל שאלה או מסיים — עם הגדרות מלאות בתוך VS Code",
+  "version": "2.0.0",
   "publisher": "zevisvei",
   "license": "MIT",
   "repository": {
@@ -43,18 +43,28 @@
         "category": "Yemot"
       },
       {
-        "command": "yemotHooks.openConfig",
-        "title": "Yemot Hooks: פתח את דף ההגדרה",
+        "command": "yemotHooks.openSettings",
+        "title": "Yemot Hooks: הגדרות",
         "category": "Yemot"
       },
       {
-        "command": "yemotHooks.importClipboard",
-        "title": "Yemot Hooks: ייבא hooks מהלוח",
+        "command": "yemotHooks.diagnose",
+        "title": "Yemot Hooks: בדיקת תקינות",
         "category": "Yemot"
       },
       {
-        "command": "yemotHooks.health",
-        "title": "Yemot Hooks: בדיקת שרת",
+        "command": "yemotHooks.testTzintuk",
+        "title": "Yemot Hooks: שלח צינתוק בדיקה",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.testCall",
+        "title": "Yemot Hooks: שיחת בדיקה (שאלה בטלפון)",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.setupApiExtension",
+        "title": "Yemot Hooks: הגדר את שלוחת ה-API בימות",
         "category": "Yemot"
       },
       {
@@ -63,35 +73,317 @@
         "category": "Yemot"
       },
       {
-        "command": "yemotHooks.show",
+        "command": "yemotHooks.showLog",
+        "title": "Yemot Hooks: הצג יומן",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.showHooks",
         "title": "Yemot Hooks: הצג את ה-hooks הפעילים",
         "category": "Yemot"
       },
       {
-        "command": "yemotHooks.openSettings",
-        "title": "Yemot Hooks: פתח את settings.json",
+        "command": "yemotHooks.openSettingsJson",
+        "title": "Yemot Hooks: פתח את settings.json של Claude",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.migrateLegacy",
+        "title": "Yemot Hooks: המר hooks ישנים (PowerShell) להגדרות",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.openConfig",
+        "title": "Yemot Hooks: פתח את דף ההגדרה (ישן)",
         "category": "Yemot"
       }
     ],
-    "configuration": {
-      "title": "Yemot Hooks",
-      "properties": {
-        "yemotHooks.serverUrl": {
-          "type": "string",
-          "default": "",
-          "description": "כתובת השרת שמריץ את גשר ה-hooks (yemot-suite או main.py), למשל http://my-server:8000 — בלי /claude-hooks. ריק = יישאל בשימוש הראשון."
-        },
-        "yemotHooks.settingsFile": {
-          "type": "string",
-          "default": "~/.claude/settings.json",
-          "description": "קובץ ההגדרות של Claude Code שבו יושבים ה-hooks."
-        },
-        "yemotHooks.configUrl": {
-          "type": "string",
-          "default": "",
-          "description": "כתובת מלאה של דף ההגדרה. ריק = <serverUrl>/claude-hooks/config (yemot-suite). עם main.py העצמאי — הכתובת שבה מתארח yemot_hooks_config.html (למשל GitHub Pages)."
+    "configuration": [
+      {
+        "title": "Yemot Hooks — כללי",
+        "order": 0,
+        "properties": {
+          "yemotHooks.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 0,
+            "markdownDescription": "הפעלת ה-hooks. כיבוי מוציא אותם מ-`settings.json` של Claude Code; ההגדרות כאן נשמרות."
+          },
+          "yemotHooks.target.method": {
+            "type": "string",
+            "enum": [
+              "list",
+              "phones",
+              "template"
+            ],
+            "enumDescriptions": [
+              "רשימת צינתוק (חינם)",
+              "מספרי טלפון ישירים",
+              "תבנית (רשימת תפוצה)"
+            ],
+            "default": "list",
+            "order": 1,
+            "markdownDescription": "לאן לצלצל כברירת מחדל. כל אירוע יכול לדרוס זאת ב-`target` משלו."
+          },
+          "yemotHooks.target.lists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "1"
+            ],
+            "order": 2,
+            "markdownDescription": "שמות רשימות הצינתוק (כש-`target.method` = `list`). רשימה מופיעה בימות רק אחרי שמישהו נרשם אליה טלפונית."
+          },
+          "yemotHooks.target.phones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "order": 3,
+            "markdownDescription": "מספרי טלפון (כש-`target.method` = `phones`)."
+          },
+          "yemotHooks.target.templateId": {
+            "type": "string",
+            "default": "",
+            "order": 4,
+            "markdownDescription": "מזהה תבנית בימות (כש-`target.method` = `template`)."
+          },
+          "yemotHooks.callerId": {
+            "type": "string",
+            "default": "",
+            "order": 5,
+            "markdownDescription": "הזיהוי היוצא. ריק = המספר הראשי של המערכת. `RAND` = אקראי מבין המאושרים."
+          },
+          "yemotHooks.tzintukTimeout": {
+            "type": "number",
+            "default": 9,
+            "minimum": 1,
+            "maximum": 16,
+            "order": 6,
+            "markdownDescription": "משך הצלצול בצינתוק, בשניות (1–16)."
+          },
+          "yemotHooks.quietHours": {
+            "type": "string",
+            "default": "",
+            "pattern": "^$|^\\d{1,2}:\\d{2}-\\d{1,2}:\\d{2}$",
+            "order": 7,
+            "markdownDescription": "שעות שקט שבהן לא מצלצלים, בפורמט `HH:MM-HH:MM` (למשל `22:00-07:00`). ריק = אין."
+          },
+          "yemotHooks.ringDelaySeconds": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 3600,
+            "order": 8,
+            "markdownDescription": "בצינתוק על הרשאה/שאלה: לצלצל רק אם לא ענית ב-VS Code תוך N שניות. 0 = מיד."
+          },
+          "yemotHooks.minTaskDurationSeconds": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "order": 9,
+            "markdownDescription": "התראה על סיום משימה רק אם המשימה נמשכה לפחות N שניות (מרגע שליחת הפרומפט). 0 = תמיד."
+          },
+          "yemotHooks.suppressSubagentInteractions": {
+            "type": "boolean",
+            "default": true,
+            "order": 10,
+            "markdownDescription": "לא לצלצל על בקשות הרשאה ושאלות שמגיעות מתוך סוכן-משנה."
+          }
+        }
+      },
+      {
+        "title": "Yemot Hooks — אירועים",
+        "order": 1,
+        "properties": {
+          "yemotHooks.needsPermission.action": {
+            "type": "string",
+            "enum": [
+              "off",
+              "tzintuk",
+              "answer"
+            ],
+            "enumDescriptions": [
+              "כבוי",
+              "צינתוק — התראה בלבד",
+              "שיחת מענה — מקש 1 מאשר, 2 מבטל"
+            ],
+            "default": "tzintuk",
+            "order": 0,
+            "markdownDescription": "מה לעשות כש-Claude מבקש הרשאה."
+          },
+          "yemotHooks.needsPermission.tools": {
+            "type": "string",
+            "default": "",
+            "order": 1,
+            "markdownDescription": "רק לכלים שמתאימים לביטוי (regex מלא), למשל `Bash|Write|Edit` או `mcp__.*`. ריק = כל הכלים."
+          },
+          "yemotHooks.needsPermission.target": {
+            "type": "string",
+            "default": "",
+            "order": 2,
+            "markdownDescription": "יעד מיוחד לאירוע הזה: `list:1,2` · `phones:0501234567` · `template:123`. ריק = ברירת המחדל."
+          },
+          "yemotHooks.asksQuestion.action": {
+            "type": "string",
+            "enum": [
+              "off",
+              "tzintuk",
+              "answer"
+            ],
+            "enumDescriptions": [
+              "כבוי",
+              "צינתוק — התראה בלבד",
+              "מענה בטלפון — השאלה והאפשרויות מוקראות, הבחירה חוזרת ל-Claude"
+            ],
+            "default": "tzintuk",
+            "order": 3,
+            "markdownDescription": "מה לעשות כש-Claude שואל שאלה (AskUserQuestion). ⚠️ במענה בטלפון Claude ממתין לתשובה בטלפון לפני שהשאלה מוצגת במסך."
+          },
+          "yemotHooks.asksQuestion.target": {
+            "type": "string",
+            "default": "",
+            "order": 4,
+            "markdownDescription": "יעד מיוחד לאירוע הזה (`list:…` / `phones:…` / `template:…`). ריק = ברירת המחדל."
+          },
+          "yemotHooks.taskCompleted.action": {
+            "type": "string",
+            "enum": [
+              "off",
+              "tzintuk"
+            ],
+            "enumDescriptions": [
+              "כבוי",
+              "צינתוק"
+            ],
+            "default": "off",
+            "order": 5,
+            "markdownDescription": "צינתוק כש-Claude מסיים תשובה."
+          },
+          "yemotHooks.taskCompleted.target": {
+            "type": "string",
+            "default": "",
+            "order": 6,
+            "markdownDescription": "יעד מיוחד לאירוע הזה. ריק = ברירת המחדל."
+          },
+          "yemotHooks.subagentCompleted.action": {
+            "type": "string",
+            "enum": [
+              "off",
+              "tzintuk"
+            ],
+            "enumDescriptions": [
+              "כבוי",
+              "צינתוק"
+            ],
+            "default": "off",
+            "order": 7,
+            "markdownDescription": "צינתוק כשסוכן-משנה מסיים."
+          },
+          "yemotHooks.subagentCompleted.target": {
+            "type": "string",
+            "default": "",
+            "order": 8,
+            "markdownDescription": "יעד מיוחד לאירוע הזה. ריק = ברירת המחדל."
+          }
+        }
+      },
+      {
+        "title": "Yemot Hooks — מענה טלפוני",
+        "order": 2,
+        "properties": {
+          "yemotHooks.answerVia": {
+            "type": "string",
+            "enum": [
+              "call",
+              "tzintuk"
+            ],
+            "enumDescriptions": [
+              "שיחה — ימות מתקשרת ומכניסה ישירות לשלוחת ה-API",
+              "צינתוק + חזרה — מצלצל, ואתה מחזיר צלצול ונכנס לשלוחת ה-API"
+            ],
+            "default": "call",
+            "markdownDescription": "איך מגיעים לשלוחת המענה, בכל אירוע שמוגדר בו **מענה בטלפון**.",
+            "order": 0
+          },
+          "yemotHooks.serverUrl": {
+            "type": "string",
+            "default": "",
+            "order": 1,
+            "markdownDescription": "כתובת שרת הגישור, למשל `http://my-server:8000` או `https://host/claude-hooks/<key>`. **בלי** `/ask-hook` או `/respond` בסוף — הם נוספים לבד (ואם יוזנו, יוסרו)."
+          },
+          "yemotHooks.ivrPath": {
+            "type": "string",
+            "default": "",
+            "order": 2,
+            "markdownDescription": "שלוחת ה-API בימות שבה עונים (למשל `5/5`). ה-`api_link` שלה חייב להיות `<serverUrl>/respond` — הפקודה **הגדר את שלוחת ה-API בימות** קובעת זאת."
+          },
+          "yemotHooks.waitTimeout": {
+            "type": "number",
+            "default": 120,
+            "minimum": 20,
+            "maximum": 600,
+            "order": 3,
+            "markdownDescription": "כמה שניות לחכות לתשובה בטלפון לפני שממשיכים כרגיל."
+          },
+          "yemotHooks.callTimeout": {
+            "type": "number",
+            "default": 30,
+            "minimum": 10,
+            "maximum": 35,
+            "order": 4,
+            "markdownDescription": "משך החיוג בשיחת מענה (`answerVia` = `call`), בשניות (עד 35)."
+          },
+          "yemotHooks.inputType": {
+            "type": "string",
+            "enum": [
+              "HebrewKeyboard",
+              "EnglishKeyboard",
+              "Number",
+              "DigitsKeyboard"
+            ],
+            "enumDescriptions": [
+              "מקלדת עברית",
+              "מקלדת אנגלית",
+              "מספר",
+              "ספרות"
+            ],
+            "default": "HebrewKeyboard",
+            "order": 5,
+            "markdownDescription": "שיטת הקלדה לתשובה חופשית (\"אחר\" בשאלה)."
+          },
+          "yemotHooks.fallbackToTzintuk": {
+            "type": "boolean",
+            "default": true,
+            "order": 6,
+            "markdownDescription": "אם השיחה נכשלה (השרת לא זמין, שגיאה) — לשלוח צינתוק במקום."
+          }
+        }
+      },
+      {
+        "title": "Yemot Hooks — מתקדם",
+        "order": 3,
+        "properties": {
+          "yemotHooks.settingsFile": {
+            "type": "string",
+            "default": "~/.claude/settings.json",
+            "markdownDescription": "קובץ ההגדרות של Claude Code שבו נרשמים ה-hooks."
+          },
+          "yemotHooks.nodePath": {
+            "type": "string",
+            "default": "node",
+            "markdownDescription": "פקודת node שבה Claude Code מריץ את ה-hooks. שנה רק אם `node` אינו ב-PATH."
+          },
+          "yemotHooks.configUrl": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "כתובת דף ההגדרה הישן (`yemot_hooks_config.html`). ריק = `<serverUrl>/claude-hooks/config`."
+          }
         }
       }
-    }
+    ]
   }
 }
