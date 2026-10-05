@@ -1,0 +1,97 @@
+{
+  "name": "yemot-hooks",
+  "displayName": "Yemot Hooks for Claude Code",
+  "description": "הדלקה, כיבוי והגדרה של hooks של ימות המשיח (צינתוק / מענה טלפוני) ל-Claude Code",
+  "version": "1.0.0",
+  "publisher": "zevisvei",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zevisvei/claude-code-yemot-hooks",
+    "directory": "vscode-extension"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "yemotHooks.menu",
+        "title": "Yemot Hooks: תפריט",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.toggle",
+        "title": "Yemot Hooks: הדלק / כבה",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.enable",
+        "title": "Yemot Hooks: הדלק",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.disable",
+        "title": "Yemot Hooks: כבה",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.openConfig",
+        "title": "Yemot Hooks: פתח את דף ההגדרה",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.importClipboard",
+        "title": "Yemot Hooks: ייבא hooks מהלוח",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.health",
+        "title": "Yemot Hooks: בדיקת שרת",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.setToken",
+        "title": "Yemot Hooks: הגדר טוקן ימות",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.show",
+        "title": "Yemot Hooks: הצג את ה-hooks הפעילים",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.openSettings",
+        "title": "Yemot Hooks: פתח את settings.json",
+        "category": "Yemot"
+      }
+    ],
+    "configuration": {
+      "title": "Yemot Hooks",
+      "properties": {
+        "yemotHooks.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "כתובת השרת שמריץ את גשר ה-hooks (yemot-suite או main.py), למשל http://my-server:8000 — בלי /claude-hooks. ריק = יישאל בשימוש הראשון."
+        },
+        "yemotHooks.settingsFile": {
+          "type": "string",
+          "default": "~/.claude/settings.json",
+          "description": "קובץ ההגדרות של Claude Code שבו יושבים ה-hooks."
+        },
+        "yemotHooks.configUrl": {
+          "type": "string",
+          "default": "",
+          "description": "כתובת מלאה של דף ההגדרה. ריק = <serverUrl>/claude-hooks/config (yemot-suite). עם main.py העצמאי — הכתובת שבה מתארח yemot_hooks_config.html (למשל GitHub Pages)."
+        }
+      }
+    }
+  }
+}

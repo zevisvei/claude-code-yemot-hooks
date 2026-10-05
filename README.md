@@ -16,6 +16,7 @@
 | [yemot_hooks_config.html](yemot_hooks_config.html) | ממשק הגדרה. פותחים בדפדפן, מגדירים כל hook בנפרד, ושומרים ל‑`settings.json`. |
 | [main.py](main.py) | שרת הגשר (FastAPI): `/ask-hook`, `/respond` (webhook GET), `/health`. |
 | [.claude/settings.json](.claude/settings.json) | דוגמת צינתוק (Notification), קורא טוקן/טלפון ממשתני סביבה. |
+| [vscode-extension/](vscode-extension/) | תוסף VS Code: הדלקה/כיבוי של ה-hooks, ייבוא מדף ההגדרה, טוקן ובדיקת שרת — גם ב-Remote-SSH. |
 ## אירועים נתמכים
 
 **PreToolUse** (שאלת AskUserQuestion) ו‑**PermissionRequest** — תומכים גם במענה טלפוני (קלט שחוזר לקלוד). **Stop**, **SubagentStop**, **UserPromptSubmit** — צינתוק (התראה) בלבד.
@@ -30,6 +31,15 @@ uv sync
 setx YEMOT_TOKEN "0790000000:1234"                # טוקן ימות (משתמש:סיסמה)
 setx TZINTUK_PHONE "0583238037"                   # לדוגמת הצינתוק שב-.claude/settings.json
 ```
+
+### Linux / Mac
+
+ה-hooks הם `"shell": "powershell"` — Claude Code מריץ אותם דרך PowerShell 7 (`pwsh`), שחייב להיות ב-PATH
+(Ubuntu: `sudo apt install powershell` ממאגר Microsoft; Mac: `brew install powershell`). את הטוקן מגדירים
+כמשתנה סביבה (`export YEMOT_TOKEN=...`) או ב-`env` של `settings.json` (התוסף עושה זאת: "הגדר טוקן ימות").
+
+כש-Claude Code רץ על שרת מרוחק, כפתור "שמור ל-settings.json" בדף ההגדרה שומר במחשב **שלך** ולא בשרת —
+לשם כך יש את [התוסף](vscode-extension/): "העתק בלוק hooks" בדף, ואז "ייבא hooks מהלוח" בחלון ה-Remote-SSH.
 
 ## ממשק ההגדרה
 
