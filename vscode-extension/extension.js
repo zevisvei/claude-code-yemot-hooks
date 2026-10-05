@@ -16,7 +16,7 @@ const rt = require("./hooks/hook.js");
 const DIR = rt.DIR;
 const HOOK_DST = path.join(DIR, "hook.js");
 const LEGACY_STASH = path.join(os.homedir(), ".claude", "yemot-hooks.json");
-const YEMOT_API = "https://www.call2all.co.il/ym/api/";
+const yemotApi = () => process.env.YEMOT_HOOKS_API || "https://www.call2all.co.il/ym/api/";
 
 const isOurs = (c) => typeof c === "string" && /yemot-hooks[\\/]+hook\.js/.test(c);
 const isLegacy = (c) => typeof c === "string" && !isOurs(c) && (c.includes("RunTzintuk") || c.includes("/ask-hook"));
@@ -60,7 +60,7 @@ const normIvr = (p) => String(p || "").trim().replace(/^ivr2:/i, "").replace(/^\
 function buildConfig() {
   const c = cfg();
   const g = (k, d) => { const v = c.get(k); return v === undefined || v === null ? d : v; };
-  const ev = (name, extra = {}) => ({ action: g(`${name}.action`, "off"), target: g(`${name}.target`, ""), ...extra });
+  const ev = (name, extra = {}) => ({ action: g(`${name}.action`, "off"), target: g(`${name}.target`, ""), callerId: String(g(`${name}.callerId`, "")).trim(), ...extra });
   return {
     enabled: g("enabled", true),
     target: { method: g("target.method", "list"), lists: g("target.lists", []), phones: g("target.phones", []), templateId: String(g("target.templateId", "")) },
@@ -256,13 +256,140 @@ function token() {
 async function yemot(ep, params = {}) {
   const t = token();
   if (!t) throw new Error("לא הוגדר טוקן ימות (Yemot Hooks: הגדר טוקן ימות).");
-  const u = new URL(YEMOT_API + ep);
+  const u = new URL(yemotApi() + ep);
   u.searchParams.set("token", t);
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
   const r = await request("GET", u.toString());
   if (!r.json) throw new Error(`${ep}: תשובה לא צפויה (HTTP ${r.code})`);
   if (r.json.responseStatus !== "OK") throw new Error(`${ep}: ${r.json.message || r.json.responseStatus}`);
   return r.json;
+}
+
+// ------------------------------------------------------------------ pickers (data loaded live from Yemot)
+const EVENTS = {
+  needsPermission: { he: "בקשת הרשאה", actions: ["off", "tzintuk", "answer"] },
+  asksQuestion: { he: "שאלה", actions: ["off", "tzintuk", "answer"] },
+  taskCompleted: { he: "סיום משימה", actions: ["off", "tzintuk"] },
+  subagentCompleted: { he: "סוכן-משנה סיים", actions: ["off", "tzintuk"] },
+};
+const ACTION_DETAIL = { off: "לא לעשות כלום", tzintuk: "צינתוק — התראה בלבד", answer: "מענה בטלפון — הבחירה חוזרת ל-Claude" };
+const localNum = (p) => { let d = String(p || "").replace(/\D/g, ""); if (d.startsWith("972")) d = "0" + d.slice(3); return d; };
+const PICK_OPTS = { ignoreFocusOut: true, matchOnDescription: true, matchOnDetail: true };
+const update = (k, v) => cfg().update(k, v, vscode.ConfigurationTarget.Global);
+
+function loading(title, fn) {
+  return vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `ימות: ${title}…` }, fn);
+}
+async function loadCallerIds() {
+  const j = await loading("טוען זיהויים יוצאים", () => yemot("GetApprovedCallerIDs"));
+  const c = j.call || {};
+  const main = localNum(c.mainDid);
+  const nums = [...new Set([c.mainDid, ...(c.secondaryDids || []), ...(c.callerIds || [])].filter(Boolean).map(localNum))];
+  return { main, nums };
+}
+async function loadLists() {
+  const j = await loading("טוען רשימות צינתוק", () => yemot("TzintukimListManagement", { action: "getlists" }));
+  return j.lists || [];
+}
+async function loadTemplates() {
+  const j = await loading("טוען תבניות", () => yemot("GetTemplates"));
+  return j.templates || [];
+}
+
+/** Caller id QuickPick. inheritLabel set → offers "inherit" (returns ""). Returns undefined on cancel. */
+async function pickCallerIdValue(current, inheritLabel) {
+  const { main, nums } = await loadCallerIds();
+  const items = [];
+  if (inheritLabel) items.push({ label: "$(arrow-up) " + inheritLabel, value: "" });
+  else items.push({ label: "$(home) המספר הראשי של המערכת", description: main, value: "" });
+  for (const n of nums) items.push({ label: n, description: n === main ? "ראשי" : "", value: n });
+  items.push({ label: "$(sync) RAND", description: "אקראי מבין המאושרים", value: "RAND" });
+  items.push({ label: "$(edit) מספר אחר…", value: "__manual" });
+  for (const i of items) if (i.value === current) i.picked = true, (i.description = ((i.description || "") + " · נוכחי").replace(/^ · /, ""));
+  const p = await vscode.window.showQuickPick(items, { ...PICK_OPTS, title: "זיהוי יוצא", placeHolder: "הזיהויים המאושרים במערכת" });
+  if (!p) return undefined;
+  if (p.value !== "__manual") return p.value;
+  const v = await vscode.window.showInputBox({ prompt: "זיהוי יוצא (חייב להיות מאושר בימות)", value: current || "", ignoreFocusOut: true,
+    validateInput: (x) => (/^(RAND|[\d+\-\s]{7,})?$/.test(x.trim()) ? null : "מספר טלפון") });
+  return v === undefined ? undefined : localNum(v) || v.trim();
+}
+
+/** Target QuickPick. allowInherit → "" means "use the default target". Returns {override, target} or undefined. */
+async function pickTargetValue(allowInherit, currentOverride) {
+  const c = buildConfig();
+  const defDesc = c.target.method === "list" ? `רשימות ${c.target.lists.join(", ")}` : c.target.method === "phones" ? c.target.phones.join(", ") : `תבנית ${c.target.templateId}`;
+  const kinds = [
+    allowInherit ? { label: "$(arrow-up) יעד ברירת המחדל", description: defDesc, kind: "inherit" } : null,
+    { label: "$(list-unordered) רשימת צינתוק", description: "חינם · טעינה מימות", kind: "list" },
+    { label: "$(device-mobile) מספרי טלפון", kind: "phones" },
+    { label: "$(file) תבנית (רשימת תפוצה)", description: "טעינה מימות", kind: "template" },
+  ].filter(Boolean);
+  if (currentOverride) for (const k of kinds) if (currentOverride.startsWith(k.kind + ":")) k.description = ((k.description || "") + " · נוכחי: " + currentOverride.split(":")[1]).replace(/^ · /, "");
+  const k = await vscode.window.showQuickPick(kinds, { ...PICK_OPTS, title: "לאן לצלצל" });
+  if (!k) return undefined;
+  if (k.kind === "inherit") return { override: "" };
+  if (k.kind === "list") {
+    const lists = await loadLists();
+    const cur = currentOverride.startsWith("list:") ? currentOverride.slice(5).split(",") : allowInherit ? [] : c.target.lists;
+    const items = lists.map((l) => ({ label: String(l.listName), description: `${l.subscribers ?? "?"} נרשמו · ${l.active ?? "?"} פעילים`, picked: cur.includes(String(l.listName)) }));
+    if (!items.length) { vscode.window.showWarningMessage("Yemot Hooks: אין רשימות צינתוק. רשימה נוצרת אחרי שמישהו נרשם אליה בשלוחת tzintuk."); return undefined; }
+    const p = await vscode.window.showQuickPick(items, { ...PICK_OPTS, canPickMany: true, title: "רשימות צינתוק" });
+    if (!p || !p.length) return undefined;
+    const names = p.map((x) => x.label);
+    return { override: "list:" + names.join(","), target: { method: "list", lists: names } };
+  }
+  if (k.kind === "template") {
+    const tpls = await loadTemplates();
+    if (!tpls.length) { vscode.window.showWarningMessage("Yemot Hooks: אין תבניות במערכת."); return undefined; }
+    const p = await vscode.window.showQuickPick(tpls.map((t) => ({ label: `#${t.templateId}`, description: t.description || "", detail: `${t.entriesCount ?? "?"} מספרים`, id: String(t.templateId) })), { ...PICK_OPTS, title: "תבנית" });
+    if (!p) return undefined;
+    return { override: "template:" + p.id, target: { method: "template", templateId: p.id } };
+  }
+  const cur = currentOverride.startsWith("phones:") ? currentOverride.slice(7) : allowInherit ? "" : c.target.phones.join(",");
+  const v = await vscode.window.showInputBox({ prompt: "מספרי טלפון, מופרדים בפסיק", value: cur, ignoreFocusOut: true,
+    validateInput: (x) => (x.split(/[,\s]+/).filter(Boolean).every((n) => localNum(n).length >= 9) ? null : "מספר לא תקין") });
+  if (!v) return undefined;
+  const phones = v.split(/[,\s]+/).filter(Boolean).map(localNum);
+  return { override: "phones:" + phones.join(","), target: { method: "phones", phones } };
+}
+
+/** Browse the IVR tree (GetIVR2Dir); returns a path like "5/5" or undefined. */
+async function browseApiExtension() {
+  let cur = "";
+  for (;;) {
+    const j = await loading("טוען שלוחות", () => yemot("GetIVR2Dir", { path: "ivr2:/" + cur }));
+    const here = cur ? await yemot("GetTextFile", { what: `ivr2:/${cur}/ext.ini` }).then((r) => /^type=(.*)$/m.exec(r.contents || "")?.[1]?.trim()).catch(() => "") : "";
+    const items = [];
+    if (here === "api") items.push({ label: `$(check) בחר את ${cur}`, description: "שלוחת API", act: "pick" });
+    if (cur) items.push({ label: "$(arrow-up) למעלה", act: "up" });
+    for (const d of j.dirs || []) {
+      const p = (cur ? cur + "/" : "") + d.name;
+      items.push({ label: `${d.extType === "api" ? "$(plug)" : "$(folder)"} ${d.name}`, description: [d.extType, d.extTitle].filter(Boolean).join(" · "), act: "open", path: p, isApi: d.extType === "api" });
+    }
+    items.push({ label: "$(add) צור כאן שלוחת API חדשה…", act: "create" });
+    const p = await vscode.window.showQuickPick(items, { ...PICK_OPTS, title: `שלוחת API · ivr2:/${cur}`, placeHolder: "שלוחות API מסומנות ב-$(plug)" });
+    if (!p) return undefined;
+    if (p.act === "pick") return cur;
+    if (p.act === "up") { cur = cur.split("/").slice(0, -1).join("/"); continue; }
+    if (p.act === "open") {
+      if (p.isApi) {
+        const ok = await vscode.window.showQuickPick([{ label: `$(check) בחר את ${p.path}`, v: "pick" }, { label: "$(folder-opened) היכנס לתיקייה", v: "open" }], { ignoreFocusOut: true, title: p.path });
+        if (!ok) continue;
+        if (ok.v === "pick") return p.path;
+      }
+      cur = p.path; continue;
+    }
+    const num = await vscode.window.showInputBox({ prompt: `מספר שלוחה חדשה תחת ivr2:/${cur}`, ignoreFocusOut: true, validateInput: (x) => (/^\d+$/.test(x.trim()) ? null : "ספרות בלבד") });
+    if (!num) continue;
+    const newPath = (cur ? cur + "/" : "") + num.trim();
+    const server = buildConfig().serverUrl;
+    const params = { path: `ivr2:/${newPath}`, type: "api", api_hangup_send: "no", title: "Claude Code" };
+    if (server) params.api_link = server + "/respond";
+    const ok = await vscode.window.showWarningMessage(`ליצור את השלוחה ${newPath} בימות (type=api${server ? `, api_link=${server}/respond` : ", בלי api_link — הגדר serverUrl"})?`, { modal: true }, "צור בימות");
+    if (!ok) continue;
+    await yemot("UpdateExtension", params);
+    return newPath;
+  }
 }
 
 // ------------------------------------------------------------------ status bar
@@ -278,12 +405,12 @@ function refresh() {
     else if (!token()) { bar.text = "$(warning) ימות: חסר טוקן"; bar.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground"); }
     else { bar.text = "$(bell) ימות"; bar.backgroundColor = undefined; }
     const rows = [
-      ["בקשת הרשאה", c.events.needsPermission.action], ["שאלה", c.events.asksQuestion.action],
-      ["סיום משימה", c.events.taskCompleted.action], ["סוכן-משנה", c.events.subagentCompleted.action],
-    ].map(([n, a]) => `| ${n} | ${ACTION_HE[a] || a} |`).join("\n");
+      ["בקשת הרשאה", c.events.needsPermission.action, c.events.needsPermission], ["שאלה", c.events.asksQuestion.action, c.events.asksQuestion],
+      ["סיום משימה", c.events.taskCompleted.action, c.events.taskCompleted], ["סוכן-משנה", c.events.subagentCompleted.action, c.events.subagentCompleted],
+    ].map(([n, a, e]) => `| ${n} | ${ACTION_HE[a] || a} | ${e.callerId || "—"} |`).join("\n");
     const t = c.target.method === "list" ? `רשימות ${c.target.lists.join(", ")}` : c.target.method === "phones" ? c.target.phones.join(", ") : `תבנית ${c.target.templateId}`;
     bar.tooltip = new vscode.MarkdownString(
-      `**Yemot Hooks** — ${c.enabled ? "פעיל" : "כבוי"} · לחיצה לתפריט\n\n| אירוע | פעולה |\n|---|---|\n${rows}\n\nיעד: ${t}` +
+      `**Yemot Hooks** — ${c.enabled ? "פעיל" : "כבוי"} · לחיצה לתפריט\n\n| אירוע | פעולה | זיהוי |\n|---|---|---|\n${rows}\n\nיעד: ${t} · זיהוי כללי: ${c.callerId || "ראשי"}` +
       (c.quietHours ? `\n\nשעות שקט: ${c.quietHours}` : "") +
       `\n\nרשומים ב-settings.json: ${count(ours)}` + (count(legacy) ? `\n\n⚠️ ${count(legacy)} hooks ישנים (PowerShell) — הרץ "המר hooks ישנים"` : ""));
   } catch (e) { bar.text = "$(error) ימות"; bar.tooltip = e.message; }
@@ -304,6 +431,7 @@ async function ensure(key, prompt, placeHolder, validate) {
   return v;
 }
 
+let cmdsRef = {};
 function makeCommands(context) {
   const cmds = {
     toggle: () => run(async () => { const on = !cfg().get("enabled"); await cfg().update("enabled", on, vscode.ConfigurationTarget.Global); return on ? "הודלק." : "כובה."; }),
@@ -316,7 +444,7 @@ function makeCommands(context) {
       const body = rt.tzintukBody(c, rt.resolveTarget(c, ""));
       if (!body) throw new Error("היעד ריק — הגדר רשימה / טלפון / תבנית.");
       const t = token(); if (!t) throw new Error("לא הוגדר טוקן ימות.");
-      const r = await request("POST", YEMOT_API + "RunTzintuk", { token: t, ...body });
+      const r = await request("POST", yemotApi() + "RunTzintuk", { token: t, ...body });
       const j = r.json || {};
       if (j.responseStatus !== "OK") throw new Error(j.message || `HTTP ${r.code}`);
       const errs = Object.keys(j.errors || {}).length ? ` · שגיאות: ${JSON.stringify(j.errors)}` : "";
@@ -353,6 +481,59 @@ function makeCommands(context) {
       return `השלוחה ${ivr} עודכנה (api_link = ${want}).`;
     }),
 
+    configureEvent: () => run(async () => {
+      const c = buildConfig();
+      const ev = await vscode.window.showQuickPick(Object.entries(EVENTS).map(([k, e]) => {
+        const cur = c.events[k];
+        return { label: e.he, description: ACTION_HE[cur.action] || cur.action, detail: [cur.target && `יעד: ${cur.target}`, cur.callerId && `זיהוי: ${cur.callerId}`].filter(Boolean).join(" · ") || undefined, key: k };
+      }), { ...PICK_OPTS, title: "איזה אירוע להגדיר?" });
+      if (!ev) return "";
+      const cur = c.events[ev.key];
+      const act = await vscode.window.showQuickPick(EVENTS[ev.key].actions.map((a) => ({ label: ACTION_HE[a], detail: ACTION_DETAIL[a], a, picked: a === cur.action, description: a === cur.action ? "נוכחי" : "" })), { ...PICK_OPTS, title: `${ev.label} — פעולה` });
+      if (!act) return "";
+      await update(`${ev.key}.action`, act.a);
+      if (act.a === "off") return `${ev.label}: כבוי.`;
+      const t = await pickTargetValue(true, cur.target || "");
+      if (t === undefined) return `${ev.label}: ${ACTION_HE[act.a]} (היעד לא שונה).`;
+      await update(`${ev.key}.target`, t.override);
+      const caller = await pickCallerIdValue(cur.callerId, `הזיהוי הכללי (${c.callerId || "ראשי"})`);
+      if (caller !== undefined) await update(`${ev.key}.callerId`, caller);
+      if (act.a === "answer" && !c.ivrPath) {
+        const pick = await vscode.window.showInformationMessage("מענה בטלפון דורש שלוחת API בימות. לבחור עכשיו?", "בחר שלוחה");
+        if (pick) { const p = await browseApiExtension(); if (p) await update("ivrPath", p); }
+      }
+      return `${ev.label}: ${ACTION_HE[act.a]} · יעד: ${t.override || "ברירת מחדל"} · זיהוי: ${caller === undefined ? cur.callerId || "כללי" : caller || "כללי"}.`;
+    }),
+    pickTarget: () => run(async () => {
+      const t = await pickTargetValue(false, "");
+      if (!t) return "";
+      await update("target.method", t.target.method);
+      if (t.target.lists) await update("target.lists", t.target.lists);
+      if (t.target.phones) await update("target.phones", t.target.phones);
+      if (t.target.templateId) await update("target.templateId", t.target.templateId);
+      return `יעד ברירת המחדל: ${t.override}.`;
+    }),
+    pickCallerId: () => run(async () => {
+      const v = await pickCallerIdValue(buildConfig().callerId, null);
+      if (v === undefined) return "";
+      await update("callerId", v);
+      return `זיהוי יוצא: ${v || "המספר הראשי"}.`;
+    }),
+    pickIvrPath: () => run(async () => {
+      const p = await browseApiExtension();
+      if (!p) return "";
+      await update("ivrPath", p);
+      const c = buildConfig();
+      if (c.serverUrl) {
+        const ini = (await yemot("GetTextFile", { what: `ivr2:/${p}/ext.ini` }).catch(() => ({}))).contents || "";
+        const link = /^api_link=(.*)$/m.exec(ini)?.[1]?.trim();
+        if (link !== c.serverUrl + "/respond") {
+          const fix = await vscode.window.showWarningMessage(`ה-api_link של ${p} הוא ${link || "(אין)"} ולא ${c.serverUrl}/respond.`, "תקן בימות");
+          if (fix) return cmdsRef.setupApiExtension();
+        }
+      }
+      return `שלוחת ה-API: ${p}.`;
+    }),
     diagnose: () => run(async () => {
       const ch = channel(); ch.clear(); ch.show(true);
       const c = buildConfig();
@@ -445,7 +626,11 @@ function makeCommands(context) {
       const c = buildConfig();
       const items = [
         c.enabled ? { label: "$(bell-slash) כבה", id: "disable" } : { label: "$(bell) הדלק", id: "enable" },
-        { label: "$(settings-gear) הגדרות", id: "openSettings", detail: "פעולה לכל אירוע, יעד, שעות שקט, מענה טלפוני" },
+        { label: "$(symbol-event) הגדר אירוע", id: "configureEvent", detail: "פעולה, יעד וזיהוי יוצא לכל אירוע — נטען מימות" },
+        { label: "$(list-unordered) יעד ברירת מחדל", id: "pickTarget", detail: "רשימות צינתוק / טלפונים / תבנית מימות" },
+        { label: "$(call-outgoing) זיהוי יוצא", id: "pickCallerId", detail: "מהזיהויים המאושרים במערכת" },
+        { label: "$(plug) שלוחת API", id: "pickIvrPath", detail: "עיון בעץ השלוחות, או יצירת שלוחה חדשה" },
+        { label: "$(settings-gear) כל ההגדרות", id: "openSettings", detail: "שעות שקט, השהיה, סף משך משימה, מענה טלפוני" },
         { label: "$(pulse) בדיקת תקינות", id: "diagnose", detail: "טוקן, רשימות, שרת, api_link של השלוחה" },
         { label: "$(megaphone) שלח צינתוק בדיקה", id: "testTzintuk" },
         { label: "$(call-outgoing) שיחת בדיקה", id: "testCall", detail: "שאלה בטלפון דרך שרת הגישור" },
@@ -460,6 +645,7 @@ function makeCommands(context) {
       if (p) cmds[p.id]();
     },
   };
+  cmdsRef = cmds;
   return cmds;
 }
 
