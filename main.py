@@ -13,6 +13,11 @@ Two ways an interactive hook builds its phone menu:
 * "manual" (fixed) - options are configured ahead of time in the HTML UI. Useful
   for events that carry no options (Stop, UserPromptSubmit, ...).
 
+* "chat" (a conversation with Claude) - its own extension, api_link = /chat/respond. This
+  server only runs the call; the computer (claude-notify-hub's bot service) long-polls
+  /chat/poll for what the caller did and sends what to play with /chat/screen. See the
+  section at the end.
+
 Flow: /ask-hook places an outbound bridging call (call_extension_bridging) that
 drops the user into a Yemot `api` extension; Yemot then calls /respond (always
 GET). We play the menu, collect a digit, and for an "open" option send a second
@@ -37,14 +42,16 @@ import asyncio
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from yemot_api.api_model import ApiModel
-from yemot_api.api_response import IdListMessageType, PlayConfirmType, hangup, read_text
+from yemot_api.api_response import IdListMessageType, PlayConfirmType, go_to_folder, hangup, read_record, read_text
+from yemot_api.api_response import join as api_response_join
 from yemot_api.async_yemot_api import AsyncYemot
 from yemot_api.input_types import RunTzintukMethod
 
@@ -250,7 +257,10 @@ class RespondModel(ApiModel):
 # ---------------------------------------------------------------- endpoints
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "token_set": bool(YEMOT_TOKEN), "pending": list(_pending.keys())}
+    now = time.monotonic()
+    return {"ok": True, "token_set": bool(YEMOT_TOKEN), "pending": list(_pending.keys()),
+            "chat": {ext: {"polled_ago": round(now - line.polled), "calls": sum(c.ext == ext for c in _chat_calls.values())}
+                     for ext, line in _chat_lines.items()}}
 
 
 @app.post("/ask-hook")
@@ -347,3 +357,169 @@ async def respond(api_model: Annotated[RespondModel, Depends()]) -> PlainTextRes
     if api_model.txt is None:
         return PlainTextResponse(_text_read(opt))
     return _finalize(p, opt, api_model.txt)
+
+
+# ---------------------------------------------------------------- chat with Claude over the phone
+# A conversation with Claude on its own Yemot `api` extension (api_link = .../chat/respond). This server only runs
+# the call: it plays what the computer sends — a "screen": text to say, then what to collect (digits, typed text,
+# a recording, or nothing) — and passes back what the caller entered. The computer (claude-notify-hub's bot
+# service) long-polls /chat/poll for those events and answers with /chat/screen; it holds the conversation, the
+# transcription and Claude. While no screen is ready the caller hears hold music (api_wait_answer_music_on_hold)
+# and the call comes back here every _CHAT_HOLD seconds (go_to_folder to its own extension).
+_CHAT_HOLD = 12          # seconds one Yemot request waits for a screen before the call loops back
+_CHAT_IDLE = 45          # the computer polled within this many seconds = it is connected
+_CHAT_GONE = 600         # a call not heard from for this long is forgotten
+_TTS_CHUNK = 220         # Yemot reads long text better in several segments
+
+
+@dataclass
+class ChatCall:
+    id: str
+    phone: str
+    ext: str
+    screens: list[dict[str, Any]] = field(default_factory=list)
+    param: str | None = None                     # the parameter of the read in flight
+    n: int = 0
+    wake: asyncio.Event = field(default_factory=asyncio.Event)
+    seen: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class ChatLine:                                  # one chat extension, one computer polling it
+    events: list[dict[str, Any]] = field(default_factory=list)
+    wake: asyncio.Event = field(default_factory=asyncio.Event)
+    polled: float = 0.0
+
+
+_chat_calls: dict[str, ChatCall] = {}
+_chat_lines: dict[str, ChatLine] = {}
+
+
+def _chat_line(ext: str) -> ChatLine:
+    return _chat_lines.setdefault(_norm_ext(ext), ChatLine())
+
+
+def _chat_push(ext: str, event: dict[str, Any]) -> None:
+    line = _chat_line(ext)
+    line.events.append(event)
+    line.wake.set()
+
+
+def _tts(text: str) -> str:
+    """Text → Yemot TTS segments ("a.t-b", to follow a "t-"), cut at sentence ends."""
+    words, segs, cur = (text or "").split(), [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > _TTS_CHUNK:
+            segs.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        segs.append(cur)
+    return ".t-".join(_sanitize_tts(s) for s in segs)
+
+
+def _chat_render(call: ChatCall) -> str:
+    s = call.screens.pop(0)
+    say = s.get("say", "")
+    while s.get("input", "none") == "none" and call.screens:   # several things to say: one after the other
+        s = call.screens.pop(0)
+        say = f"{say} {s.get('say', '')}".strip()
+    inp, msg, here = s.get("input", "none"), _tts(say), go_to_folder("/" + call.ext)
+    if inp in ("none", "hangup"):
+        then = hangup() if inp == "hangup" else here
+        return api_response_join(f"id_list_message=t-{msg}", then) if msg else then
+    call.n += 1
+    call.param = f"c{call.n}"
+    msg = msg or _sanitize_tts("הקש")
+    if inp == "record":
+        # only the folder: with a file name / confirm / save-on-hangup Yemot drops the request that follows
+        return read_record(IdListMessageType.Text, msg, call.param, file_dir=f"/{call.ext}/rec")
+    if inp == "text":
+        return read_text(IdListMessageType.Text, msg, call.param, max_digits=int(s.get("max") or 400), min_digits=1,
+                         play_confirm_type=PlayConfirmType.HebrewKeyboard)
+    values = str(s.get("values") or "")
+    return read_text(IdListMessageType.Text, msg, call.param, max_digits=int(s.get("max") or 1),
+                     min_digits=int(s.get("min") or 1), timeout=int(s.get("timeout") or 15),
+                     play_confirm_type=PlayConfirmType.NO, allowed_values=list(values) if values else None, conform=False,
+                     timout_empty_times=1, allow_empty=True)
+
+
+def _chat_prune() -> None:
+    now = time.monotonic()
+    for cid in [k for k, c in _chat_calls.items() if now - c.seen > _CHAT_GONE]:
+        _chat_calls.pop(cid, None)
+
+
+class ChatPollBody(BaseModel):
+    ext: str
+    wait: int = 20
+
+
+class ChatScreenBody(BaseModel):
+    call: str
+    say: str = ""
+    input: str = "none"                          # digits | text | record | none | hangup
+    max: int = 1
+    min: int = 1
+    values: str = ""                             # allowed digits ("" = any)
+    timeout: int = 15
+
+
+@app.post("/chat/poll")
+async def chat_poll(body: ChatPollBody) -> dict[str, Any]:
+    """The computer waits here (≤ 25 s) for what callers did: start · input (value) · hangup."""
+    line = _chat_line(body.ext)
+    line.polled = time.monotonic()
+    if not line.events:
+        line.wake.clear()
+        try:
+            await asyncio.wait_for(line.wake.wait(), timeout=min(max(body.wait, 0), 25))
+        except asyncio.TimeoutError:
+            pass
+    line.polled = time.monotonic()
+    events, line.events = line.events, []
+    _chat_prune()
+    return {"events": events}
+
+
+@app.post("/chat/screen")
+async def chat_screen(body: ChatScreenBody) -> dict[str, Any]:
+    call = _chat_calls.get(body.call)
+    if call is None:
+        return {"ok": False, "error": "the call ended"}
+    call.screens.append(body.model_dump())
+    call.wake.set()
+    return {"ok": True}
+
+
+@app.get("/chat/respond")
+async def chat_respond(request: Request, m: Annotated[ApiModel, Depends()]) -> PlainTextResponse:
+    ext, cid = _norm_ext(m.api_extension), m.api_call_id or ""
+    call = _chat_calls.get(cid)
+    if m.hangup == "yes":
+        if call is not None:
+            _chat_calls.pop(cid, None)
+            _chat_push(call.ext, {"call": cid, "phone": call.phone, "type": "hangup"})
+        return PlainTextResponse("")
+    if call is None:
+        line = _chat_lines.get(ext)
+        if line is None or time.monotonic() - line.polled > _CHAT_IDLE:
+            return PlainTextResponse(api_response_join(
+                f"id_list_message=t-{_tts('המחשב לא מחובר כרגע. נסה שוב מאוחר יותר')}", hangup()))
+        call = _chat_calls[cid] = ChatCall(cid, _norm_phone(m.api_phone), ext)
+        _chat_push(ext, {"call": cid, "phone": call.phone, "type": "start"})
+    call.seen = time.monotonic()
+    if call.param is not None:                   # the answer to the read in flight ("" = nothing entered)
+        value = request.query_params.get(call.param)
+        call.param = None
+        _chat_push(ext, {"call": cid, "phone": call.phone, "type": "input", "value": value or ""})
+    if not call.screens:
+        call.wake.clear()
+        try:
+            await asyncio.wait_for(call.wake.wait(), timeout=_CHAT_HOLD)
+        except asyncio.TimeoutError:
+            pass
+    if not call.screens:
+        return PlainTextResponse(go_to_folder("/" + ext))
+    return PlainTextResponse(_chat_render(call))
