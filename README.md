@@ -14,12 +14,14 @@
 | קובץ | תפקיד |
 |------|-------|
 | [yemot_hooks_config.html](yemot_hooks_config.html) | ממשק הגדרה. פותחים בדפדפן, מגדירים כל hook בנפרד, ושומרים ל‑`settings.json`. |
-| [main.py](main.py) | שרת הגשר (FastAPI): `/ask-hook`, `/respond` (webhook GET), `/health`. |
+| [main.py](main.py) | שרת הגשר (FastAPI): `/ask-hook`, `/respond` (webhook GET), `/chat/*` (צ'אט טלפוני), `/health`. |
 | [.claude/settings.json](.claude/settings.json) | דוגמת צינתוק (Notification), קורא טוקן/טלפון ממשתני סביבה. |
-| [vscode-extension/](vscode-extension/) | תוסף VS Code: הדלקה/כיבוי של ה-hooks, ייבוא מדף ההגדרה, טוקן ובדיקת שרת — גם ב-Remote-SSH. |
+| [vscode-extension/](vscode-extension/) | תוסף VS Code: הדלקה/כיבוי של ה-hooks, ייבוא מדף ההגדרה, טוקן ובדיקת שרת — גם ב-Remote-SSH. וגם צ'אט עם Claude בטלפון. |
 ## אירועים נתמכים
 
-**PreToolUse** (שאלת AskUserQuestion) ו‑**PermissionRequest** — תומכים גם במענה טלפוני (קלט שחוזר לקלוד). **Stop**, **SubagentStop**, **UserPromptSubmit** — צינתוק (התראה) בלבד.
+**PermissionRequest** (בקשת הרשאה, וגם שאלת AskUserQuestion) ו‑**PreToolUse** (שאלה, בדרך הישנה) — תומכים גם במענה טלפוני (קלט שחוזר לקלוד). ב‑PermissionRequest השאלה מוצגת גם במחשב בזמן שהטלפון מצלצל, והראשון שעונה קובע. **Stop**, **SubagentStop**, **UserPromptSubmit** — צינתוק (התראה) בלבד.
+
+ובנוסף: **[צ'אט עם Claude בטלפון](#צאט-עם-claude-בטלפון)** — מתקשרים, מקליטים או מקלידים, ו‑Claude עונה בקול.
 
 ## התקנה
 
@@ -69,7 +71,7 @@ setx TZINTUK_PHONE "0583238037"                   # לדוגמת הצינתוק 
 
 | מצב | מתי | מה קורה |
 |-----|-----|---------|
-| **מהשאלה של קלוד** (askuser) | PreToolUse על `AskUserQuestion` | התפריט נבנה בזמן ריצה מ‑`tool_input.questions[].options[]`. מתווספת "אחר" לטקסט חופשי. הבחירה חוזרת כ‑deny+reason. |
+| **מהשאלה של קלוד** (askuser) | PermissionRequest (או PreToolUse) על `AskUserQuestion` | התפריט נבנה בזמן ריצה מ‑`tool_input.questions[].options[]`. מתווספת "אחר" לטקסט חופשי. ב‑PermissionRequest הבחירה חוזרת כתשובה אמיתית (`updatedInput.answers`), והשאלה מוצגת גם במחשב באותו זמן. ב‑PreToolUse היא חוזרת כ‑deny+reason. |
 | **מהבקשה של קלוד** (permission) | PermissionRequest | השאלה = הבקשה + "לאישור הקש 1, לביטול הקש 2". חוזר כ‑`decision.behavior` allow/deny. |
 
 > **Stop, SubagentStop, UserPromptSubmit** — בממשק הם צינתוק (התראה) בלבד. השרת עדיין מכיר מצב "טקסט חופשי" (open) למי שירחיב אותם ידנית.
@@ -111,6 +113,10 @@ Claude hook  --stdin+config → POST /ask-hook-->  main.py
 ```
 
 **כמה שאלות במקביל:** השרת מזהה כל שאלה לפי השלוחה (`ApiExtension`), לכן הקצה לכל hook שלוחת `api` נפרדת (ivr_path ייחודי). ה‑hook **חוסם** עד מענה או תום `wait_timeout` (ברירת מחדל 90 שנ'); ללא מענה — לא מודפס כלום ו‑Claude ממשיך.
+
+## צ'אט עם Claude בטלפון
+
+שלוחת `api` נפרדת שה‑`api_link` שלה הוא `<server>/chat/respond`. מתקשרים, מקליטים או מקלידים, ו‑Claude עונה בקול. השרת רק מנהל את השיחה: הוא משמיע "מסך" (טקסט, ואחריו מקשים, הקלדה, הקלטה או כלום) ומחזיר את מה שהוקש. התוסף ל‑VS Code (`chat.js`) מושך את האירועים (`/chat/poll`), שולח את המסכים (`/chat/screen`) ומריץ את Claude במחשב. בזמן ההמתנה המתקשר שומע מוזיקה, והשיחה חוזרת לשרת כל 12 שניות. `/health` מראה את שלוחות הצ'אט ומתי המחשב משך לאחרונה. ההגדרה וההסבר המלא: [vscode-extension/README.md](vscode-extension/README.md#צאט-עם-claude-בטלפון).
 
 ## אבטחה
 

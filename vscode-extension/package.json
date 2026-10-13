@@ -1,8 +1,8 @@
 {
   "name": "yemot-hooks",
   "displayName": "Yemot Hooks for Claude Code",
-  "description": "צינתוק ומענה טלפוני מימות המשיח כש-Claude Code מבקש הרשאה, שואל שאלה או מסיים — עם הגדרות מלאות בתוך VS Code",
-  "version": "2.1.0",
+  "description": "צינתוק ומענה טלפוני מימות המשיח כש-Claude Code מבקש הרשאה, שואל שאלה או מסיים, וצ'אט עם Claude בטלפון — עם הגדרות מלאות בתוך VS Code",
+  "version": "2.2.0",
   "publisher": "zevisvei",
   "license": "MIT",
   "repository": {
@@ -85,6 +85,11 @@
       {
         "command": "yemotHooks.setupApiExtension",
         "title": "Yemot Hooks: הגדר את שלוחת ה-API בימות",
+        "category": "Yemot"
+      },
+      {
+        "command": "yemotHooks.setupChat",
+        "title": "Yemot Hooks: הגדר צ'אט טלפוני",
         "category": "Yemot"
       },
       {
@@ -199,6 +204,12 @@
             "maximum": 3600,
             "order": 8,
             "markdownDescription": "בצינתוק על הרשאה/שאלה: לצלצל רק אם לא ענית ב-VS Code תוך N שניות. 0 = מיד."
+          },
+          "yemotHooks.answerDelaySeconds": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "markdownDescription": "מענה בטלפון: כמה שניות לחכות לפני שימות מתקשרת. השאלה מוצגת במחשב מיד, ואם ענית שם בזמן הזה, השיחה לא יוצאת. 0 = מיד."
           },
           "yemotHooks.minTaskDurationSeconds": {
             "type": "number",
@@ -408,8 +419,120 @@
         }
       },
       {
-        "title": "Yemot Hooks — מתקדם",
+        "title": "Yemot Hooks — צ'אט טלפוני",
         "order": 3,
+        "properties": {
+          "yemotHooks.chat.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 0,
+            "markdownDescription": "**צ'אט עם Claude בטלפון.** מתקשרים לשלוחת הצ'אט, מקליטים או מקלידים הודעה, ו-Claude עונה בקול. שאלות, הרשאות ותוכניות של Claude נשאלות באותה שיחה. ההגדרה הקלה: הפקודה **Yemot Hooks: הגדר צ'אט טלפוני**."
+          },
+          "yemotHooks.chat.ivrPath": {
+            "type": "string",
+            "default": "",
+            "order": 1,
+            "markdownDescription": "שלוחת הצ'אט בימות, למשל `5/6`. נפרדת משלוחת המענה. api_link שלה: `<serverUrl>/chat/respond`."
+          },
+          "yemotHooks.chat.phones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "order": 2,
+            "markdownDescription": "הטלפונים שמותר להם להתקשר. מספר אחר מנותק מיד."
+          },
+          "yemotHooks.chat.pin": {
+            "type": "string",
+            "default": "",
+            "order": 3,
+            "markdownDescription": "קוד גישה שמקישים בתחילת כל שיחה (ספרות). מומלץ: זיהוי מתקשר אפשר לזייף."
+          },
+          "yemotHooks.chat.projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "order": 4,
+            "markdownDescription": "התיקיות ש-Claude עובד בהן מהטלפון (שם הפרויקט = שם התיקייה). בשיחה חדשה בוחרים ביניהן."
+          },
+          "yemotHooks.chat.defaultProject": {
+            "type": "string",
+            "default": "",
+            "order": 5,
+            "markdownDescription": "שם התיקייה לשיחה הראשונה (ריק = הראשונה ברשימה)."
+          },
+          "yemotHooks.chat.general": {
+            "type": "boolean",
+            "default": true,
+            "order": 6,
+            "markdownDescription": "גם \"כללי\": שיחה בלי פרויקט, בתיקייה ריקה משלה."
+          },
+          "yemotHooks.chat.permissionMode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk",
+              "bypassPermissions"
+            ],
+            "default": "default",
+            "order": 7,
+            "markdownDescription": "מצב ההרשאות של Claude בשיחות מהטלפון. ב-`default` כל פעולה נשאלת בשיחה."
+          },
+          "yemotHooks.chat.model": {
+            "type": "string",
+            "default": "",
+            "order": 8,
+            "markdownDescription": "מודל (ריק = ברירת המחדל של Claude Code), למשל `sonnet`."
+          },
+          "yemotHooks.chat.confirm": {
+            "type": "boolean",
+            "default": true,
+            "order": 9,
+            "markdownDescription": "להקריא את התמלול לאישור לפני השליחה."
+          },
+          "yemotHooks.chat.hint": {
+            "type": "boolean",
+            "default": true,
+            "order": 10,
+            "markdownDescription": "לבקש מ-Claude תשובה קצרה שמתאימה להקראה."
+          },
+          "yemotHooks.chat.missedTzintuk": {
+            "type": "boolean",
+            "default": true,
+            "order": 11,
+            "markdownDescription": "צינתוק כשהתשובה מגיעה אחרי שניתקת. היא מוקראת בתחילת השיחה הבאה."
+          },
+          "yemotHooks.chat.maxSpeak": {
+            "type": "number",
+            "default": 1500,
+            "minimum": 200,
+            "order": 12,
+            "markdownDescription": "כמה תווים מהתשובה להקריא."
+          },
+          "yemotHooks.chat.maxMinutes": {
+            "type": "number",
+            "default": 30,
+            "minimum": 1,
+            "order": 13,
+            "markdownDescription": "הגבלת זמן להודעה אחת (דקות)."
+          },
+          "yemotHooks.chat.claudePath": {
+            "type": "string",
+            "default": "",
+            "order": 14,
+            "markdownDescription": "נתיב ל-`claude` (ריק = מה-PATH)."
+          }
+        }
+      },
+      {
+        "title": "Yemot Hooks — מתקדם",
+        "order": 4,
         "properties": {
           "yemotHooks.settingsFile": {
             "type": "string",

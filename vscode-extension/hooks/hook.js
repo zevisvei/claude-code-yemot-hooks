@@ -2,6 +2,9 @@
 // Yemot Hooks — runtime for every Claude Code hook event.
 // Usage (written into settings.json by the VS Code extension):
 //   node ~/.claude/yemot-hooks/hook.js <permission|question|stop|subagent|prompt|clear>
+// A permission and a question are asked in PermissionRequest hooks: Claude Code shows them at the computer
+// (VS Code / the terminal) at the same time, and the first answer wins. Answered at the computer → the tool runs,
+// its PostToolUse ("clear") ends the phone call that was still waiting.
 // Reads the hook JSON on stdin and the live config from ~/.claude/yemot-hooks/config.json,
 // so changing a setting in VS Code takes effect on the next hook without touching settings.json.
 // Never throws at Claude: every failure is written to hook.log and the hook exits 0.
@@ -42,7 +45,7 @@ function readState(kind, session) {
 }
 function clearState(kind, session) { try { fs.unlinkSync(stateFile(kind, session)); } catch {} }
 
-function postJson(url, body, timeoutMs) {
+function postJson(url, body, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(body), "utf8");
     const u = new URL(url);
@@ -62,6 +65,10 @@ function postJson(url, body, timeoutMs) {
     });
     req.on("timeout", () => req.destroy(new Error(`timeout after ${Math.round(timeoutMs / 1000)}s (${u.pathname})`)));
     req.on("error", reject);
+    if (signal) {
+      if (signal.aborted) return req.destroy(new Error("aborted"));
+      signal.addEventListener("abort", () => req.destroy(new Error("aborted")), { once: true });
+    }
     req.end(data);
   });
 }
@@ -150,7 +157,8 @@ async function deferredRing(payloadB64) {
 }
 
 // Interactive: the bridge server calls the phone and blocks until a key is pressed.
-async function askBridge(cfg, ev, mode, raw) {
+// Returns {emit, answer}, null (no answer / answered at the computer), or {__failed}.
+async function askBridge(cfg, ev, mode, raw, signal) {
   const server = String(cfg.serverUrl || "").replace(/\/+$/, "");
   if (!server) { log("ERROR interactive skipped: serverUrl is empty"); return { __failed: "no serverUrl" }; }
   if (!cfg.ivrPath) { log("ERROR interactive skipped: ivrPath is empty"); return { __failed: "no ivrPath" }; }
@@ -168,16 +176,36 @@ async function askBridge(cfg, ev, mode, raw) {
   };
   log("ask", mode, config.call_method, "->", server + "/ask-hook", "ivr", cfg.ivrPath);
   try {
-    const r = await postJson(server + "/ask-hook", { config, hook_input: raw }, (wait + 30) * 1000);
-    if (r.answered) { log("answered", mode, JSON.stringify(r.answer)); return r.emit || null; }
+    const r = await postJson(server + "/ask-hook", { config, hook_input: raw }, (wait + 30) * 1000, signal);
+    if (r.answered) { log("answered", mode, JSON.stringify(r.answer)); return r.emit ? { emit: r.emit, answer: r.answer } : null; }
     if (r.error === "timeout") { log("no answer (timeout)", mode); return null; }
     log("ERROR bridge:", r.error, mode);
     return { __failed: r.error || "unknown" };
   } catch (e) {
+    if (signal && signal.aborted) return null;
     log("ERROR bridge", mode, e.message);
     return { __failed: e.message };
   }
 }
+
+// ------------------------------------------------------------------ answers
+/** Which hook asks a question: PermissionRequest (now) or PreToolUse (registered by an older version). */
+const questionEvent = (input) => (input.hook_event_name === "PreToolUse" ? "PreToolUse" : "PermissionRequest");
+/** The phone's answer to AskUserQuestion, as Claude takes it: allow + updatedInput {questions, answers}. The bridge
+ *  reads out the first question: digits 1..n = its options, n+1 = "other" (typed text). */
+function questionEmit(input, answer) {
+  const qs = (input.tool_input && input.tool_input.questions) || [];
+  const opts = (qs[0] && qs[0].options) || [];
+  const a = String(answer == null ? "" : answer);
+  const label = /^\d+$/.test(a) && opts[+a - 1] ? opts[+a - 1].label : a;
+  if (!qs.length || !label) return null;
+  const updatedInput = { questions: qs, answers: { [qs[0].question]: label } };
+  if (questionEvent(input) === "PreToolUse") return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "נענה בטלפון", updatedInput } };
+  return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow", updatedInput } } };
+}
+// "live": a hook is waiting for the phone on something Claude Code shows at the computer too. Its value names the
+// agent and the tool: the PostToolUse of that tool means it was answered there (a sub-agent's tools don't count).
+const liveTag = (input) => `${input.agent_id || ""}|${input.tool_name || ""}`;
 
 // ------------------------------------------------------------------ events
 const EVENT_KEY = { permission: "needsPermission", question: "asksQuestion", stop: "taskCompleted", subagent: "subagentCompleted" };
@@ -188,12 +216,17 @@ async function handle(which, raw, out) {
   try { input = JSON.parse(raw || "{}"); } catch {}
   const session = input.session_id || "default";
 
-  // bookkeeping: a reply in VS Code cancels a pending delayed ring; prompt start feeds the duration threshold
+  // bookkeeping: a reply in VS Code cancels a pending delayed ring / a call still waiting; prompt start feeds the
+  // duration threshold. A tool that ran ends only the ask about it.
   if (which === "prompt" || which === "clear") {
     clearState("wait", session);
+    const l = String(readState("live", session) || "");
+    if (which === "prompt" || !l.includes("|") || l.slice(l.indexOf("|") + 1) === liveTag(input)) clearState("live", session);
     if (which === "prompt") writeState("start", session, Date.now());
     return;
   }
+  // a session of the phone chat (chat.js) asks on its own call
+  if (process.env.YEMOT_HOOKS_CHAT === "1") return;
 
   const cfg = readConfig();
   if (!cfg || !cfg.enabled) return;
@@ -201,7 +234,7 @@ async function handle(which, raw, out) {
   if (!evKey) { log("WARN unknown hook kind", which); return; }
   const ev = (cfg.events && cfg.events[evKey]) || {};
   const action = ev.action || "off";
-  if (which === "stop") clearState("wait", session);
+  if (which === "stop") { clearState("wait", session); if (!input.agent_id) clearState("live", session); }
   if (action === "off") return;
 
   if (cfg.suppressSubagentInteractions !== false && input.agent_id && (which === "permission" || which === "question")) return;
@@ -229,14 +262,32 @@ async function handle(which, raw, out) {
     return;
   }
 
-  // answer: the phone call decides (question / permission only)
-  const emit = await askBridge(cfg, ev, which === "question" ? "askuser" : "permission", raw);
-
-  if (emit && emit.__failed) {
-    if (cfg.fallbackToTzintuk !== false) { log("fallback -> tzintuk", why); await sendTzintuk(cfg, target, why + " (fallback)", ev.callerId); }
-    return;
+  // answer: the phone call decides (question / permission only) — or the computer, where Claude Code shows the same
+  // question meanwhile (PermissionRequest): answered there → the call is dropped
+  const atComputer = which === "permission" || questionEvent(input) === "PermissionRequest";
+  const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + "|" + liveTag(input);
+  const ac = new AbortController();
+  let poll = null;
+  if (atComputer) {
+    writeState("live", session, nonce);
+    poll = setInterval(() => { if (readState("live", session) !== nonce) { log("answered at the computer —", why); ac.abort(); } }, 500);
   }
-  if (emit) out(JSON.stringify(emit));
+  try {
+    const delay = Math.max(+cfg.answerDelaySeconds || 0, 0) * 1000, t0 = Date.now();
+    while (atComputer && Date.now() - t0 < delay && !ac.signal.aborted) await new Promise((r) => setTimeout(r, 250));
+    if (ac.signal.aborted) return;
+    const res = await askBridge(cfg, ev, which === "question" ? "askuser" : "permission", raw, ac.signal);
+    if (res && res.__failed) {
+      if (cfg.fallbackToTzintuk !== false && !ac.signal.aborted) { log("fallback -> tzintuk", why); await sendTzintuk(cfg, target, why + " (fallback)", ev.callerId); }
+      return;
+    }
+    if (!res || ac.signal.aborted) return;
+    const emit = which === "question" ? questionEmit(input, res.answer) || (questionEvent(input) === "PreToolUse" ? res.emit : null) : res.emit;
+    if (emit) out(JSON.stringify(emit));
+  } finally {
+    if (poll) clearInterval(poll);
+    if (atComputer && readState("live", session) === nonce) clearState("live", session);
+  }
 }
 
 async function main() {
@@ -248,7 +299,7 @@ async function main() {
   await handle(which, raw, (s) => process.stdout.write(s));
 }
 
-module.exports = { inQuietHours, resolveTarget, normPhone, tzintukBody, askBridge, handle, DIR, LOG, CONFIG };
+module.exports = { inQuietHours, resolveTarget, normPhone, tzintukBody, askBridge, questionEmit, handle, DIR, LOG, CONFIG };
 if (require.main === module) {
   main().catch((e) => log("ERROR", (e && e.stack) || String(e))).finally(() => { process.exitCode = 0; });
 }

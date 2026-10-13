@@ -131,7 +131,16 @@ def _find(ext: str | None, phone: str | None) -> Pending | None:
 
 
 # ---------------------------------------------------------------- option building
-def _askuser_emit(answer_text: str) -> dict[str, Any]:
+def _askuser_emit(answer_text: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The answer to AskUserQuestion. Asked in a PermissionRequest hook (it runs while Claude Code shows the question
+    at the computer too, so either may answer): allow + updatedInput {questions, answers} — a real answer. Asked in a
+    PreToolUse hook: deny + reason (a PreToolUse hook cannot answer the question itself)."""
+    data = data or {}
+    if data.get("hook_event_name") == "PermissionRequest":
+        qs = (data.get("tool_input", {}) or {}).get("questions") or []
+        if qs:
+            return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {
+                "behavior": "allow", "updatedInput": {"questions": qs, "answers": {str(qs[0].get("question", "")): answer_text}}}}}
     # A hook cannot inject a tool result; deny + reason feeds the answer to Claude.
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -154,14 +163,14 @@ def _open_emit(event: str, kind: str) -> dict[str, Any]:
                                    "additionalContext": SENTINEL}}
 
 
-def _askuser_options(options: list[dict[str, Any]], input_type: str) -> dict[str, dict[str, Any]]:
+def _askuser_options(options: list[dict[str, Any]], input_type: str, data: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for i, o in enumerate(options, 1):
         label = str(o.get("label", "")).strip() or f"אפשרות {i}"
-        out[str(i)] = {"label": label, "emit": _askuser_emit(label)}
+        out[str(i)] = {"label": label, "emit": _askuser_emit(label, data)}
     other = str(len(options) + 1)
     out[other] = {"label": "אחר", "open": True, "input_type": input_type,
-                  "open_prompt": "הקלד את תשובתך ואז סולמית", "emit": _askuser_emit(SENTINEL)}
+                  "open_prompt": "הקלד את תשובתך ואז סולמית", "emit": _askuser_emit(SENTINEL, data)}
     return out
 
 
@@ -197,7 +206,7 @@ def _build(cfg: HookConfig, hook_input: object) -> tuple[str, dict[str, dict[str
         questions = (data.get("tool_input", {}) or {}).get("questions") or []
         q0 = questions[0] if questions else {}
         question = str(q0.get("question") or "שאלה")
-        options = _askuser_options(q0.get("options") or [], cfg.input_type)
+        options = _askuser_options(q0.get("options") or [], cfg.input_type, data)
         return _spoken_menu(question, options), options
     if cfg.mode == "open":
         prompt = cfg.question or "אנא הקלד את תשובתך ואז סולמית"

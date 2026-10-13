@@ -10,11 +10,12 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const https = require("https");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const rt = require("./hooks/hook.js");
 
 const DIR = rt.DIR;
 const HOOK_DST = path.join(DIR, "hook.js");
+const CHAT_DST = path.join(DIR, "chat.js"); // the phone chat (hooks/chat.js), a process of its own
 const LEGACY_STASH = path.join(os.homedir(), ".claude", "yemot-hooks.json");
 const yemotApi = () => process.env.YEMOT_HOOKS_API || "https://www.call2all.co.il/ym/api/";
 
@@ -68,6 +69,7 @@ function buildConfig() {
     tzintukTimeout: g("tzintukTimeout", 9),
     quietHours: g("quietHours", ""),
     ringDelaySeconds: g("ringDelaySeconds", 0),
+    answerDelaySeconds: g("answerDelaySeconds", 0),
     minTaskDurationSeconds: g("minTaskDurationSeconds", 0),
     suppressSubagentInteractions: g("suppressSubagentInteractions", true),
     answerVia: g("answerVia", "call"),
@@ -77,6 +79,13 @@ function buildConfig() {
     callTimeout: g("callTimeout", 30),
     inputType: g("inputType", "HebrewKeyboard"),
     fallbackToTzintuk: g("fallbackToTzintuk", true),
+    // chat with Claude by phone (hooks/chat.js)
+    chat: {
+      enabled: g("chat.enabled", false), ivrPath: normIvr(g("chat.ivrPath", "")), phones: g("chat.phones", []).map(localNum).filter(Boolean), pin: String(g("chat.pin", "")).trim(),
+      projects: g("chat.projects", []), defaultProject: g("chat.defaultProject", ""), general: g("chat.general", true), permissionMode: g("chat.permissionMode", "default"),
+      model: g("chat.model", ""), claudePath: g("chat.claudePath", ""), confirm: g("chat.confirm", true), hint: g("chat.hint", true), missedTzintuk: g("chat.missedTzintuk", true),
+      maxSpeak: g("chat.maxSpeak", 1500), maxMinutes: g("chat.maxMinutes", 30),
+    },
     events: {
       needsPermission: ev("needsPermission", { tools: g("needsPermission.tools", "") }),
       asksQuestion: ev("asksQuestion"),
@@ -97,19 +106,22 @@ function desiredHooks(c) {
   const h = {};
   const add = (event, matcher, kind, interactive) => {
     const hook = { type: "command", command: hookCommand(kind), timeout: interactive ? Math.ceil(+c.waitTimeout || 120) + 60 : 15 };
-    if (interactive) hook.statusMessage = "📞 ממתין לתשובה בטלפון…";
+    if (interactive) hook.statusMessage = "📞 אפשר לענות גם בטלפון…";
     (h[event] = h[event] || []).push(matcher ? { matcher, hooks: [hook] } : { hooks: [hook] });
   };
   const e = c.events;
   if (!c.enabled) return h;
   const on = (x) => x.action && x.action !== "off";
   if (on(e.needsPermission)) add("PermissionRequest", null, "permission", e.needsPermission.action === "answer");
-  if (on(e.asksQuestion)) add("PreToolUse", "AskUserQuestion", "question", e.asksQuestion.action === "answer");
+  // PermissionRequest, not PreToolUse: it runs while Claude Code shows the question itself, so the computer and the
+  // phone can both answer (PreToolUse ran before the question and hid it)
+  if (on(e.asksQuestion)) add("PermissionRequest", "AskUserQuestion", "question", e.asksQuestion.action === "answer");
   if (on(e.taskCompleted)) add("Stop", null, "stop", false);
   if (on(e.subagentCompleted)) add("SubagentStop", null, "subagent", false);
   if (Object.keys(h).length) add("UserPromptSubmit", null, "prompt", false);
+  // the tool ran = answered at the computer: a delayed ring is dropped, a call that still waits ends
   const delayed = +c.ringDelaySeconds > 0 && [e.needsPermission, e.asksQuestion].some((x) => x.action === "tzintuk");
-  if (delayed) add("PostToolUse", null, "clear", false);
+  if (delayed || [e.needsPermission, e.asksQuestion].some((x) => x.action === "answer")) add("PostToolUse", null, "clear", false);
   return h;
 }
 
@@ -140,7 +152,9 @@ const count = (h) => Object.values(h || {}).reduce((n, gs) => n + gs.reduce((m, 
 function sync(context) {
   const c = buildConfig();
   writeIfChanged(HOOK_DST, fs.readFileSync(path.join(context.extensionPath, "hooks", "hook.js"), "utf8"), 0o755);
+  writeIfChanged(CHAT_DST, fs.readFileSync(path.join(context.extensionPath, "hooks", "chat.js"), "utf8"), 0o755);
   writeJson(rt.CONFIG, c);
+  ensureChat(c);
   const file = settingsPath();
   const s = readJson(file, {});
   const { legacy, rest } = splitHooks(s.hooks);
@@ -149,6 +163,29 @@ function sync(context) {
   if (Object.keys(hooks).length) next.hooks = hooks; else delete next.hooks;
   const changed = JSON.stringify(next) !== JSON.stringify(s) && writeJson(file, next);
   return { changed, legacy: count(legacy) };
+}
+
+// ------------------------------------------------------------------ the phone chat process
+const CHAT_PID = path.join(DIR, "state", "chat.pid");
+const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** Is chat.js running (this version)? */
+function chatRunning() {
+  const p = readJson(CHAT_PID, null);
+  if (!p || !isAlive(p.pid)) return null;
+  try { return { ...p, current: p.mtime === fs.statSync(CHAT_DST).mtimeMs }; } catch { return p; }
+}
+/** On while chat.enabled: start chat.js (detached — it outlives the window; one instance). Off: it ends by itself. */
+function ensureChat(c) {
+  if (!c.chat.enabled || !fs.existsSync(CHAT_DST)) return;
+  const r = chatRunning();
+  if (r && r.current) return;
+  const node = (cfg().get("nodePath") || "node").trim();
+  try {
+    const child = spawn(node, [CHAT_DST], { detached: true, stdio: "ignore", env: { ...process.env, YEMOT_TOKEN: token() } });
+    child.on("error", (e) => channel().appendLine(`צ'אט טלפוני: ההפעלה נכשלה — ${e.message}`));
+    child.unref();
+    channel().appendLine(`${new Date().toLocaleTimeString()} צ'אט טלפוני: השירות הופעל`);
+  } catch (e) { channel().appendLine(`צ'אט טלפוני: ההפעלה נכשלה — ${e.message}`); }
 }
 
 // ------------------------------------------------------------------ legacy migration
@@ -456,12 +493,14 @@ function makeCommands(context) {
       if (!c.serverUrl) await ensure("serverUrl", "כתובת שרת הגישור", "http://my-server:8000", (v) => (/^https?:\/\/\S+$/.test(v.trim()) ? null : "כתובת http(s) מלאה"));
       if (!c.ivrPath) await ensure("ivrPath", "שלוחת ה-API בימות", "5/5");
       const c2 = buildConfig();
-      const fake = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "בדיקה מהתוסף. מה לבחור?", options: [{ label: "תקין" }, { label: "לא תקין" }] }] } });
+      const fakeInput = { hook_event_name: "PermissionRequest", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "בדיקה מהתוסף. מה לבחור?", options: [{ label: "תקין" }, { label: "לא תקין" }] }] } };
+      const fake = JSON.stringify(fakeInput);
       return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Yemot Hooks: ${c2.answerVia === "tzintuk" ? "צינתוק נשלח — חזור לשלוחה" : "מתקשר"} ${c2.ivrPath}, ממתין לתשובה…` }, async () => {
-        const emit = await rt.askBridge(c2, { action: "answer", target: "" }, "askuser", fake);
-        if (emit && emit.__failed) throw new Error("השיחה נכשלה: " + emit.__failed);
-        if (!emit) return "לא התקבלה תשובה בזמן.";
-        return "התקבלה תשובה: " + (emit.hookSpecificOutput?.permissionDecisionReason || JSON.stringify(emit));
+        const res = await rt.askBridge(c2, { action: "answer", target: "" }, "askuser", fake);
+        if (res && res.__failed) throw new Error("השיחה נכשלה: " + res.__failed);
+        if (!res) return "לא התקבלה תשובה בזמן.";
+        const emit = rt.questionEmit(fakeInput, res.answer);
+        return "התקבלה תשובה: " + (Object.values(emit?.hookSpecificOutput?.decision?.updatedInput?.answers || {})[0] || res.answer);
       });
     }),
 
@@ -479,6 +518,32 @@ function makeCommands(context) {
       if (!ok) return "";
       await yemot("UpdateExtension", { path: `ivr2:/${ivr}`, type: "api", api_link: want, api_hangup_send: "no" });
       return `השלוחה ${ivr} עודכנה (api_link = ${want}).`;
+    }),
+
+    setupChat: () => run(async () => {
+      const server = normServer(await ensure("serverUrl", "כתובת שרת הגישור (ציבורית — ימות פונה אליה)", "http://my-server:8000", (v) => (/^https?:\/\/\S+$/.test(v.trim()) ? null : "כתובת http(s) מלאה")));
+      if (!token()) throw new Error("לא הוגדר טוקן ימות (Yemot Hooks: הגדר טוקן ימות).");
+      const c = buildConfig();
+      const ivr = normIvr(await vscode.window.showInputBox({ prompt: "שלוחת הצ'אט בימות (נפרדת משלוחת המענה). היא תוגדר כשלוחת API", value: c.chat.ivrPath || "", placeHolder: "5/6", ignoreFocusOut: true,
+        validateInput: (v) => (/^\/?\d+(\/\d+)*\/?$/.test(v.trim()) ? null : "נתיב שלוחה, למשל 5/6") }) || "");
+      if (!ivr) return "";
+      if (ivr === c.ivrPath) throw new Error("זו שלוחת המענה. הצ'אט צריך שלוחה משלו.");
+      const phones = (await vscode.window.showInputBox({ prompt: "טלפונים שמותר להם להתקשר (מופרדים בפסיק)", value: c.chat.phones.join(", "), placeHolder: "0501234567, 0521234567", ignoreFocusOut: true,
+        validateInput: (v) => (v.split(/[,\s]+/).filter(Boolean).every((x) => /^\+?[\d-]{9,}$/.test(x)) && v.trim() ? null : "לפחות טלפון אחד") }) || "").split(/[,\s]+/).map(localNum).filter(Boolean);
+      if (!phones.length) return "";
+      let projects = c.chat.projects;
+      const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
+      if (!projects.length && folders.length) {
+        const pick = await vscode.window.showQuickPick(folders.map((f) => ({ label: path.basename(f), description: f, picked: true, f })), { ...PICK_OPTS, canPickMany: true, title: "באילו תיקיות Claude יעבוד מהטלפון? (תמיד יש גם \"כללי\")" });
+        projects = (pick || []).map((x) => x.f);
+      }
+      const want = server + "/chat/respond";
+      const ok = await vscode.window.showWarningMessage(`להגדיר את שלוחה ${ivr} בימות כשלוחת הצ'אט?\n\ntype: api\napi_link: ${want}\n+ מוזיקת המתנה, דיווח על ניתוק, ותיקיית ${ivr}/rec להקלטות`, { modal: true }, "הגדר");
+      if (!ok) return "";
+      await yemot("UpdateExtension", { path: `ivr2:/${ivr}`, type: "api", title: "צ'אט עם Claude", api_link: want, api_hangup_send: "yes", api_wait_answer_music_on_hold: "yes" });
+      await yemot("UpdateExtension", { path: `ivr2:/${ivr}/rec`, title: "הקלטות לצ'אט עם Claude" });
+      await update("chat.ivrPath", ivr); await update("chat.phones", phones); await update("chat.projects", projects); await update("chat.enabled", true);
+      return `הצ'אט הטלפוני מוגדר בשלוחה ${ivr}.${buildConfig().chat.pin ? "" : " מומלץ להגדיר קוד גישה (yemotHooks.chat.pin): זיהוי מתקשר אפשר לזייף."}`;
     }),
 
     configureEvent: () => run(async () => {
@@ -589,6 +654,31 @@ function makeCommands(context) {
         }
       }
 
+      if (c.chat.enabled) {
+        ch.appendLine("\nצ'אט טלפוני:");
+        const r = chatRunning();
+        line(!!r, `השירות: ${r ? `רץ (pid ${r.pid})${r.current ? "" : " — גרסה ישנה, תוחלף"}` : "לא רץ"}`);
+        line(!!c.chat.ivrPath, `שלוחה: ${c.chat.ivrPath || "(אין) — הרץ \"הגדר צ'אט טלפוני\""}`);
+        line(c.chat.phones.length > 0, `טלפונים מורשים: ${c.chat.phones.join(", ") || "(אין)"}`);
+        if (!c.chat.pin) line(null, "בלי קוד גישה (chat.pin). זיהוי מתקשר אפשר לזייף");
+        const major = +String(nv.stdout || "").replace(/^v/, "").split(".")[0] || 0;
+        line(major >= 22, `תמלול הקלטות: ${major >= 22 ? "Node " + major : `דורש Node 22 ומעלה (yemotHooks.nodePath), יש ${nv.stdout?.trim() || "?"}`}`);
+        if (c.serverUrl) {
+          try {
+            const h = (await request("GET", c.serverUrl + "/health", undefined, 8000)).json || {};
+            if (!("chat" in h)) line(false, "שרת הגישור לא מכיר צ'אט טלפוני — עדכן את main.py");
+            else { const ago = h.chat[c.chat.ivrPath]?.polled_ago; line(ago != null && ago < 45, `השירות מחובר לשרת הגישור: ${ago != null ? `לפני ${ago} שנ׳` : "לא"}`); }
+          } catch (e) { line(false, `שרת הגישור: ${e.message}`); }
+        }
+        if (t && c.chat.ivrPath) {
+          try {
+            const ini = (await yemot("GetTextFile", { what: `ivr2:/${c.chat.ivrPath}/ext.ini` })).contents || "";
+            const link = /^api_link=(.*)$/m.exec(ini)?.[1]?.trim();
+            line(link === c.serverUrl + "/chat/respond", `api_link של שלוחת הצ'אט: ${link || "(אין)"}`);
+          } catch (e) { line(false, `שלוחה ${c.chat.ivrPath}: ${e.message}`); }
+        }
+      }
+
       try {
         const errs = fs.readFileSync(rt.LOG, "utf8").split("\n").filter((l) => l.includes("ERROR")).slice(-5);
         if (errs.length) { ch.appendLine("\nשגיאות אחרונות ביומן:"); errs.forEach((l) => ch.appendLine("  " + l)); }
@@ -635,6 +725,7 @@ function makeCommands(context) {
         { label: "$(megaphone) שלח צינתוק בדיקה", id: "testTzintuk" },
         { label: "$(call-outgoing) שיחת בדיקה", id: "testCall", detail: "שאלה בטלפון דרך שרת הגישור" },
         { label: "$(server) הגדר את שלוחת ה-API בימות", id: "setupApiExtension" },
+        { label: "$(comment-discussion) הגדר צ'אט טלפוני", id: "setupChat", detail: "מתקשרים, מקליטים או מקלידים, ו-Claude עונה בקול" },
         { label: "$(key) הגדר טוקן ימות", id: "setToken" },
         { label: "$(output) הצג יומן", id: "showLog" },
         { label: "$(list-tree) הצג hooks", id: "showHooks" },

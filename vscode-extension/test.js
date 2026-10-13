@@ -77,10 +77,12 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   assert.equal(T.count(sp.legacy), 0, "legacy removed");
   assert.equal(s.model, "x"); assert.equal(s.env.YEMOT_TOKEN, "u:p");
   assert.deepEqual(sp.rest.Stop, [{ hooks: [other] }], "foreign hooks kept");
-  assert.ok(sp.ours.PermissionRequest && sp.ours.PreToolUse && sp.ours.UserPromptSubmit, "ours registered");
-  assert.equal(sp.ours.PreToolUse[0].matcher, "AskUserQuestion");
-  assert.equal(sp.ours.PreToolUse[0].hooks[0].timeout, 180, "interactive timeout = wait + 60");
-  assert.equal(sp.ours.PermissionRequest[0].hooks[0].timeout, 15);
+  assert.ok(sp.ours.PermissionRequest && sp.ours.UserPromptSubmit, "ours registered");
+  assert.ok(!sp.ours.PreToolUse, "a question is asked in PermissionRequest now (Claude Code shows it at the computer meanwhile)");
+  const qg = sp.ours.PermissionRequest.find((g) => g.matcher === "AskUserQuestion"), pg = sp.ours.PermissionRequest.find((g) => !g.matcher);
+  assert.equal(qg.hooks[0].timeout, 180, "interactive timeout = wait + 60");
+  assert.equal(pg.hooks[0].timeout, 15);
+  assert.ok(sp.ours.PostToolUse, "PostToolUse: answered at the computer ends the call");
   assert.ok(!sp.ours.Stop, "Stop off → not registered");
   const cfgFile = JSON.parse(fs.readFileSync(path.join(home, ".claude", "yemot-hooks", "config.json"), "utf8"));
   assert.equal(cfgFile.serverUrl, "http://h:8000/claude-hooks/K");
@@ -103,7 +105,9 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   assert.equal((fs.statSync(S).mode & 0o777).toString(8), "600");
 
   // ---------------------------------------------------------- runtime against mock servers
-  const calls = [];
+  const calls = [], screens = []; let askDelay = 0;
+  /** One second of silence as Yemot records it: WAV, PCM 16 bit, 8 kHz, mono. */
+  const wav = () => { const d = Buffer.alloc(16000), h = Buffer.alloc(44); h.write("RIFF", 0); h.writeUInt32LE(36 + d.length, 4); h.write("WAVEfmt ", 8); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(8000, 24); h.writeUInt32LE(16000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write("data", 36); h.writeUInt32LE(d.length, 40); return Buffer.concat([h, d]); };
   const srv = http.createServer((req, res) => {
     let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
       const body = b ? JSON.parse(b) : {};
@@ -112,9 +116,39 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
       if (req.url.includes("/GetApprovedCallerIDs")) return res.end(JSON.stringify({ responseStatus: "OK", call: { mainDid: "+97231111111", secondaryDids: ["+97232222222"], callerIds: ["+97231111111"] } }));
       if (req.url.includes("/TzintukimListManagement")) return res.end(JSON.stringify({ responseStatus: "OK", lists: [{ listName: "1", subscribers: 1, active: 1 }, { listName: "vip", subscribers: 3, active: 2 }] }));
       if (req.url.endsWith("/RunTzintuk")) return res.end(JSON.stringify({ responseStatus: "OK", callsCount: 1, biling: "0.00", errors: {} }));
-      if (req.url === "/claude-hooks/K/ask-hook") return res.end(JSON.stringify({ answered: true, answer: "1", emit: { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } } }));
+      if (req.url === "/claude-hooks/K/ask-hook") return setTimeout(() => res.end(JSON.stringify({ answered: true, answer: body.config.mode === "askuser" ? "2" : "1", emit: { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } } })), askDelay);
+      // the phone chat (chat.js): screens, and the recordings it fetches from the IVR
+      if (req.url === "/claude-hooks/K/chat/screen") { screens.push(body); return res.end(JSON.stringify({ ok: true })); }
+      if (req.url === "/claude-hooks/K/chat/poll") return setTimeout(() => res.end(JSON.stringify({ events: [] })), 200);
+      if (req.url.includes("/DownloadFile")) { res.setHeader("Content-Type", "application/octet-stream"); return res.end(wav()); }
+      if (req.url.includes("/FileAction")) return res.end(JSON.stringify({ responseStatus: "OK" }));
       res.statusCode = 404; res.end("{}");
     });
+  });
+  // Claude's dictation service (WebSocket): the query and the binary frames are noted, one utterance comes back
+  const sttSeen = { query: "", frames: 0 };
+  srv.on("upgrade", (req, sock) => {
+    sttSeen.query = req.url; sttSeen.frames = 0;
+    const accept = require("crypto").createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const frame = (op, data) => { const d = Buffer.from(data); return Buffer.concat([Buffer.from([0x80 | op, d.length < 126 ? d.length : 126]), d.length < 126 ? Buffer.alloc(0) : Buffer.from([d.length >> 8, d.length & 255]), d]); };
+    let buf = Buffer.alloc(0);
+    sock.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      while (buf.length >= 2) {
+        let len = buf[1] & 127, off = 2;
+        if (len === 126) { len = buf.readUInt16BE(2); off = 4; }
+        if (buf.length < off + 4 + len) return;
+        const mask = buf.subarray(off, off + 4), pl = Buffer.from(buf.subarray(off + 4, off + 4 + len)).map((x, i) => x ^ mask[i % 4]), op = buf[0] & 15;
+        buf = buf.subarray(off + 4 + len);
+        if (op === 2) sttSeen.frames++;
+        if (op === 1 && pl.toString().includes("CloseStream")) {
+          for (const m of [{ type: "TranscriptText", data: "תבדוק את הלוגים" }, { type: "TranscriptEndpoint" }]) sock.write(frame(1, JSON.stringify(m)));
+          sock.write(frame(8, Buffer.from([3, 232]))); sock.end();
+        }
+      }
+    });
+    sock.on("error", () => {});
   });
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${srv.address().port}`;
@@ -205,6 +239,37 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   assert.ok(ask, "posted to <server>/ask-hook exactly once-suffixed");
   assert.equal(ask.body.config.mode, "permission"); assert.equal(ask.body.config.call_method, "tzintuk"); assert.equal(ask.body.config.ivr_path, "5/5");
 
+  // a question: asked in PermissionRequest (shown at the computer meanwhile); the digit → the option, as a real answer
+  const qInput = { session_id: "q1", hook_event_name: "PermissionRequest", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "צבע?", options: [{ label: "אדום" }, { label: "כחול" }] }] } };
+  writeCfg({ serverUrl: base + "/claude-hooks/K", events: { ...cfgFile.events, asksQuestion: { action: "answer", target: "" } } });
+  r = await runHook("question", qInput);
+  let qo = JSON.parse(r.stdout).hookSpecificOutput;
+  assert.ok(qo.hookEventName === "PermissionRequest" && qo.decision.behavior === "allow" && qo.decision.updatedInput.answers["צבע?"] === "כחול", r.stdout);
+  // hooks registered by an older version (PreToolUse): answered in that form
+  qo = JSON.parse((await runHook("question", { ...qInput, hook_event_name: "PreToolUse" })).stdout).hookSpecificOutput;
+  assert.ok(qo.hookEventName === "PreToolUse" && qo.permissionDecision === "allow" && qo.updatedInput.answers["צבע?"] === "כחול");
+  // answered at the computer while the phone rings: the tool ran (PostToolUse of that tool) → the call is dropped
+  askDelay = 5000;
+  let t0 = Date.now(); const pend = runHook("question", { ...qInput, session_id: "q2" });
+  await tick(700);
+  await runHook("clear", { session_id: "q2", tool_name: "Read", agent_id: "a1" }); // a sub-agent's tool: still asking
+  await tick(700);
+  await runHook("clear", { session_id: "q2", tool_name: "AskUserQuestion" });
+  r = await pend;
+  assert.ok(r.stdout === "" && Date.now() - t0 < 4000, `dropped, nothing printed (${Date.now() - t0} ms)`);
+  askDelay = 0;
+  // answerDelaySeconds: answered at the computer in time → no call at all
+  calls.length = 0;
+  writeCfg({ serverUrl: base + "/claude-hooks/K", answerDelaySeconds: 2, events: { ...cfgFile.events, asksQuestion: { action: "answer", target: "" } } });
+  const pend2 = runHook("question", { ...qInput, session_id: "q3" });
+  await tick(500); await runHook("clear", { session_id: "q3", tool_name: "AskUserQuestion" });
+  assert.equal((await pend2).stdout, ""); assert.ok(!calls.some((c) => c.url.endsWith("/ask-hook")), "no call");
+  // a session of the phone chat asks on its own call: the hooks stay out
+  writeCfg({ serverUrl: base + "/claude-hooks/K", events: { ...cfgFile.events, needsPermission: { action: "answer", target: "", tools: "" } } });
+  const chatRun = await new Promise((resolve) => { const p = spawn(process.execPath, [hookJs, "permission"], { env: { ...process.env, HOME: home, YEMOT_TOKEN: "u:p", YEMOT_HOOKS_API: base + "/ym/api/", YEMOT_HOOKS_CHAT: "1" } }); let o = ""; p.stdout.on("data", (d) => (o += d)); p.on("close", () => resolve(o)); p.stdin.end(JSON.stringify({ session_id: "c1", tool_name: "Bash" })); });
+  assert.equal(chatRun, "");
+  assert.ok(!calls.some((c) => c.url.endsWith("/ask-hook")), "chat session: no call");
+
   // bridge down → fallback tzintuk
   calls.length = 0;
   writeCfg({ serverUrl: base + "/nope", events: { ...cfgFile.events, needsPermission: { action: "answer", target: "", tools: "" } } });
@@ -224,6 +289,97 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   writeCfg({ enabled: false, events: { ...cfgFile.events, needsPermission: { action: "tzintuk", target: "", tools: "" } } });
   await runHook("permission", { session_id: "s7", tool_name: "Bash" }); await tick(400);
   assert.equal(calls.length, 0, "disabled");
+
+  // ---------------------------------------------------------- chat with Claude by phone (hooks/chat.js)
+  {
+    const fake = path.join(home, "fake-claude.js"), argsLog = path.join(home, "claude-args.jsonl"), proj = path.join(home, "myproj");
+    fs.mkdirSync(proj);
+    fs.writeFileSync(fake, `#!${process.execPath}
+const fs=require("fs");const a=process.argv.slice(2);const o=(x)=>process.stdout.write(JSON.stringify(x)+"\\n");
+let buf="",P="",pend=null;
+const finish=(extra="")=>{o({type:"result",subtype:"success",is_error:false,result:"**בוצע**: "+P+extra,session_id:"s"});};
+process.stdin.setEncoding("utf8");
+process.stdin.on("data",(d)=>{buf+=d;let i;while((i=buf.indexOf("\\n"))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);const m=JSON.parse(l);
+  if(m.type==="user"){P=m.message.content;fs.appendFileSync(${JSON.stringify(argsLog)},JSON.stringify({a,cwd:process.cwd(),p:P,chat:process.env.YEMOT_HOOKS_CHAT})+"\\n");
+    if(P.startsWith("perm"))o({type:"control_request",request_id:"r1",request:{subtype:"can_use_tool",tool_name:"Bash",input:{command:"rm -rf build"}}});
+    else if(P.startsWith("שאלה"))o({type:"control_request",request_id:"r2",request:{subtype:"can_use_tool",tool_name:"AskUserQuestion",input:{questions:[{question:"איזה צבע?",options:[{label:"אדום"},{label:"כחול"}]}]}}});
+    else if(P.startsWith("slow"))setTimeout(()=>finish(),1500);
+    else finish();}
+  if(m.type==="control_response"){const r=m.response.response;finish(" · "+r.behavior+(r.updatedInput&&r.updatedInput.answers?" "+JSON.stringify(r.updatedInput.answers):""));}
+}});
+process.stdin.on("end",()=>process.exit(0));
+`, { mode: 0o755 });
+    const PH = "0501112222";
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "tok", expiresAt: Date.now() + 3600e3 } }));
+    Object.assign(process.env, { YEMOT_TOKEN: "u:p", YEMOT_HOOKS_API: base + "/ym/api/", YEMOT_HOOKS_STT_URL: base.replace("http", "ws") + "/stt" });
+    writeCfg({ serverUrl: base + "/claude-hooks/K", chat: { enabled: true, ivrPath: "5/6", phones: [PH], projects: [proj], claudePath: fake, hint: false } });
+    const chat = require(path.join(home, ".claude", "yemot-hooks", "chat.js"));
+    const ev = (e) => { chat.onEvent(chat.config(), e); return tick(60); }, last = () => screens[screens.length - 1] || {};
+    const runs = () => fs.readFileSync(argsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    await ev({ type: "start", call: "X", phone: "0509990000" });
+    assert.ok(await waitFor(() => screens.some((x) => x.call === "X" && x.input === "hangup")), "a phone not on the list is hung up on");
+    await ev({ type: "start", call: "C1", phone: "+972-50-111-2222" });
+    assert.ok(await waitFor(() => last().call === "C1" && last().input === "digits" && last().say.includes("להקלדה הקש 2")), "the menu");
+    // typed → Claude (in the first folder) → the answer read out, no markup, then the menu
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().input === "text");
+    let k = screens.length;
+    await ev({ type: "input", call: "C1", value: "מה שלומך" });
+    assert.ok(await waitFor(() => screens.slice(k).some((x) => x.say.includes("קלוד ענה: בוצע : מה שלומך") && x.input === "digits"), 5000), JSON.stringify(screens.slice(k)));
+    let rr = runs(); assert.ok(rr[0].cwd === proj && rr[0].a.includes("--session-id") && rr[0].a.includes("--permission-prompt-tool") && rr[0].chat === "1", JSON.stringify(rr[0]));
+    // a permission: asked on the call; the next message resumes the same session
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().input === "text");
+    k = screens.length;
+    await ev({ type: "input", call: "C1", value: "perm נקה" });
+    assert.ok(await waitFor(() => last().say?.includes("קלוד מבקש הרשאה") && last().say.includes("rm -rf build")), "asked on the call");
+    await ev({ type: "input", call: "C1", value: "1" });
+    assert.ok(await waitFor(() => screens.slice(k).some((x) => x.say.includes("allow")), 5000), "approved");
+    rr = runs(); assert.ok(rr[1].a.includes("--resume") && rr[1].a[rr[1].a.indexOf("--resume") + 1] === rr[0].a[rr[0].a.indexOf("--session-id") + 1], "the same session goes on");
+    // a question: the digit picks the option, given to Claude as its answer
+    await waitFor(() => last().input === "digits");
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().input === "text");
+    k = screens.length;
+    await ev({ type: "input", call: "C1", value: "שאלה" });
+    assert.ok(await waitFor(() => last().say?.includes("קלוד שואל") && last().say.includes("איזה צבע")), "the question read out");
+    await ev({ type: "input", call: "C1", value: "2" });
+    assert.ok(await waitFor(() => screens.slice(k).some((x) => x.say.includes("כחול")), 5000), "answered: " + JSON.stringify(screens.slice(k).map((x) => x.say)));
+    // recorded: fetched only from the rec folder, transcribed (WAV as linear16), read back, sent
+    await waitFor(() => last().input === "digits");
+    await ev({ type: "input", call: "C1", value: "1" }); await waitFor(() => last().input === "record");
+    await ev({ type: "input", call: "C1", value: "/1/secret.wav" });
+    assert.ok(await waitFor(() => last().say?.includes("לא נקלטה")) && !calls.some((x) => x.url.includes("/DownloadFile")), "nothing outside the rec folder");
+    await ev({ type: "input", call: "C1", value: "/5/6/rec/000.wav" });
+    assert.ok(await waitFor(() => last().say?.includes("שמעתי: תבדוק את הלוגים")), "read back: " + JSON.stringify(last()));
+    assert.ok(sttSeen.query.includes("encoding=linear16") && sttSeen.query.includes("sample_rate=8000") && sttSeen.frames > 0, sttSeen.query);
+    assert.ok(calls.some((x) => x.url.includes("/FileAction")), "deleted from the IVR");
+    k = screens.length;
+    await ev({ type: "input", call: "C1", value: "1" });
+    assert.ok(await waitFor(() => screens.slice(k).some((x) => x.say.includes("קלוד ענה: בוצע : תבדוק את הלוגים")), 5000));
+    // a new conversation in a chosen folder ("כללי")
+    await waitFor(() => last().input === "digits");
+    await ev({ type: "input", call: "C1", value: "4" });
+    assert.ok(await waitFor(() => last().say?.includes("באיזה פרויקט") && last().say.includes("myproj") && last().say.includes("שיחה כללית")));
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().say?.includes("שיחה חדשה"));
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().input === "text");
+    k = screens.length;
+    await ev({ type: "input", call: "C1", value: "שלום כללי" });
+    assert.ok(await waitFor(() => screens.slice(k).some((x) => x.say.includes("קלוד ענה")), 5000));
+    rr = runs(); assert.ok(rr[rr.length - 1].cwd.endsWith("chat-general") && rr[rr.length - 1].a.includes("--session-id"), "a new session in its folder");
+    // hung up before the answer: a tzintuk, and the answer at the next call
+    await waitFor(() => last().input === "digits");
+    await ev({ type: "input", call: "C1", value: "2" }); await waitFor(() => last().input === "text");
+    calls.length = 0;
+    await ev({ type: "input", call: "C1", value: "slow אחרי הניתוק" });
+    await ev({ type: "hangup", call: "C1" });
+    assert.ok(await waitFor(() => calls.some((x) => x.url.endsWith("/RunTzintuk") && x.body.phones === PH), 5000), "rang");
+    await ev({ type: "start", call: "C2", phone: PH });
+    assert.ok(await waitFor(() => last().call === "C2" && last().say.includes("יש תשובה חדשה") && last().say.includes("אחרי הניתוק")), JSON.stringify(last()));
+    // a PIN, when set
+    writeCfg({ serverUrl: base + "/claude-hooks/K", chat: { enabled: true, ivrPath: "5/6", phones: [PH], pin: "4321", projects: [proj], claudePath: fake } });
+    await ev({ type: "start", call: "C3", phone: PH });
+    assert.ok(await waitFor(() => last().call === "C3" && last().say.includes("קוד הגישה")));
+    await ev({ type: "input", call: "C3", value: "1111" }); assert.ok(await waitFor(() => last().say.includes("קוד שגוי")));
+    await ev({ type: "input", call: "C3", value: "4321" }); assert.ok(await waitFor(() => last().say.includes("להקלדה הקש 2")), "opened");
+  }
 
   srv.close();
   console.log("ALL TESTS PASSED"); process.exit(0);
